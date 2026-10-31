@@ -189,64 +189,7 @@ body {
   line-height: 1.3;
 }
 
-/* AI Dubbing Box */
-.dub-box {
-  background: rgba(0, 200, 83, 0.05);
-  border: 1px solid rgba(0, 200, 83, 0.2);
-  border-radius: 8px;
-  margin: 6px 14px 10px;
-  padding: 10px 12px;
-}
-.dub-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.dub-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: #00e676;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.dub-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 6px;
-  gap: 8px;
-}
-.dub-lbl {
-  font-size: 11px;
-  color: #888;
-  flex-shrink: 0;
-}
-.dub-select, .dub-input {
-  background: #1e1e24;
-  border: 1px solid #333;
-  color: #eee;
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 11px;
-  outline: none;
-  width: 155px;
-}
-.dub-select:focus, .dub-input:focus {
-  border-color: #00e676;
-}
-.dub-val {
-  font-size: 11px;
-  font-weight: 700;
-  color: #00e676;
-}
-.dub-desc {
-  font-size: 10px;
-  color: #777;
-  margin-top: 8px;
-  line-height: 1.3;
-}
+
 
 /* ── DIVIDER ── */
 .divider { height: 1px; background: #1c1c1c; margin: 4px 0; }
@@ -312,45 +255,6 @@ body {
   <div class="audio-desc">Khuếch đại lớn + Bass sâu + Vocal nét (Tube Limiter chống rè 100%).</div>
 </div>
 
-<!-- AI DUBBING BOX -->
-<div class="dub-box">
-  <div class="dub-header">
-    <span class="dub-title">🎙️ Thuyết Minh AI (Dubbing)</span>
-    <label class="mtog yt">
-      <input type="checkbox" id="dubbingEnabled">
-      <div class="mt-track"></div>
-      <div class="mt-thumb"></div>
-    </label>
-  </div>
-  <div class="dub-row">
-    <span class="dub-lbl">Bộ máy dịch:</span>
-    <select id="dubbingProvider" class="dub-select">
-      <option value="gemini">Gemini AI (Đo âm tiết)</option>
-      <option value="google">Google Dịch (Siêu tốc)</option>
-    </select>
-  </div>
-  <div class="dub-row" id="geminiKeyRow">
-    <span class="dub-lbl">Gemini Key:</span>
-    <input type="password" id="geminiApiKey" class="dub-input" placeholder="Nhập API Key">
-  </div>
-  <div class="dub-row">
-    <span class="dub-lbl">Giọng đọc:</span>
-    <select id="dubbingVoice" class="dub-select">
-      <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ · Edge-TTS)</option>
-      <option value="vi-VN-NamMinhNeural">Nam Minh (Nam · Edge-TTS)</option>
-    </select>
-  </div>
-  <div class="dub-row" style="margin-top:8px;">
-    <span class="dub-lbl">Âm lượng lồng tiếng:</span>
-    <span class="dub-val" id="dubVolumeVal">100%</span>
-  </div>
-  <input type="range" class="audio-slider" id="dubVolumeSlider" min="0" max="2.0" step="0.1" value="1.0" style="margin-top:4px;">
-  <div class="dub-row" style="margin-top:8px;">
-    <span class="dub-lbl">Tiếng video gốc (khi đọc):</span>
-    <span class="dub-val" id="dubDuckVal">15%</span>
-  </div>
-  <input type="range" class="audio-slider" id="dubDuckSlider" min="0" max="1.0" step="0.05" value="0.15" style="margin-top:4px;">
-  <div class="dub-desc">Kéo thanh trượt để chỉnh lớn nhỏ tiếng dịch & tiếng gốc theo ý muốn.</div>
 </div>
 
 <div class="item">
@@ -385,14 +289,7 @@ body {
 <!-- GENERAL BẢO VỆ -->
 <div class="section-label">Bảo vệ & Tiện ích</div>
 
-<div class="item">
-  <span class="item-icon">🌐</span>
-  <div class="item-body">
-    <div class="item-name">Dịch chuột phải sang Tiếng Việt</div>
-    <div class="item-desc">Chuột phải vào chữ bôi đen để dịch</div>
-  </div>
-  <label class="mtog"><input type="checkbox" id="autoTranslate" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
-</div>
+
 
 <div class="item">
   <span class="item-icon">🚫</span>

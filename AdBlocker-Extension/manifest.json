@@ -1,10 +1,9 @@
 {
   "manifest_version": 3,
   "name": "UltraBlock Pro",
-  "version": "2.1.0",
-  "description": "Chặn quảng cáo tuyệt đối + Tối ưu Chrome cực mượt + Khuếch đại âm thanh 500%.",
+  "version": "2.2.0",
+  "description": "Chặn quảng cáo tuyệt đối + Tối ưu Chrome cực mượt + Khuếch đại Âm thanh 500%.",
   "permissions": [
-    "contextMenus",
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
     "declarativeNetRequestFeedback",
@@ -23,14 +22,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["perf-injector.js", "content.js", "translator.js"],
+      "js": ["perf-injector.js", "content.js"],
       "css": ["blocker.css"],
       "run_at": "document_start",
       "all_frames": true
     },
     {
       "matches": ["*://*.youtube.com/*"],
-      "js": ["youtube-blocker.js", "youtube-dubber.js"],
+      "js": ["youtube-blocker.js"],
       "run_at": "document_start",
       "all_frames": false
     },
@@ -67,7 +66,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["blocker.css", "perf-injector.js", "audio-main-world.js", "youtube-dubber.js"],
+      "resources": ["blocker.css", "perf-injector.js", "audio-main-world.js"],
       "matches": ["<all_urls>"]
     }
   ]
