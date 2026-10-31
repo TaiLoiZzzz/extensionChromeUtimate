@@ -201,12 +201,17 @@ async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
 
 // ─── TẢI PHỤ ĐỀ YOUTUBE TIMEDTEXT XUYÊN DOMAIN ───
 async function fetchSubtitles(url) {
-  const res = await fetch(url);
-  if (url.includes('fmt=json3')) {
-    return await res.json();
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept': '*/*'
+      }
+    });
+    return await res.text();
+  } catch (err) {
+    return '';
   }
-  const text = await res.text();
-  return text;
 }
 
 // ─── TỰ ĐỘNG GIẢI PHÓNG RAM CÁC TAB CHẠY NGẦM KHÔNG DÙNG (MEMORY SAVER) ───

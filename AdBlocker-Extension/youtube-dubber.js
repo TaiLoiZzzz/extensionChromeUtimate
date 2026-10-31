@@ -88,107 +88,228 @@
     return urlParams.get('v') || '';
   }
 
-  // ─── TẢI PHỤ ĐỀ TỪ YOUTUBE TIMEDTEXT API ───
+  // ─── GỌI MAIN WORLD FETCH TIMEDTEXT (CÙNG ORIGIN YOUTUBE.COM + COOKIES) ───
+  function fetchSubtitlesFromMainWorld(url) {
+    return new Promise((resolve) => {
+      const requestId = 'sub_' + Math.random().toString(36).substring(2);
+      let resolved = false;
+
+      const handler = (event) => {
+        if (event.data?.type === 'UB_SUBTITLES_FETCHED' && event.data.requestId === requestId) {
+          window.removeEventListener('message', handler);
+          clearTimeout(timer);
+          resolved = true;
+          if (event.data.success && event.data.data && event.data.data.length > 10) {
+            resolve(event.data.data);
+          } else {
+            resolve(null);
+          }
+        }
+      };
+
+      window.addEventListener('message', handler);
+      window.postMessage({ type: 'UB_FETCH_SUBTITLES_DIRECT', url, requestId }, '*');
+
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          window.removeEventListener('message', handler);
+          resolve(null);
+        }
+      }, 3500);
+    });
+  }
+
+  // ─── GỌI BACKGROUND SERVICE WORKER FETCH (DỰ PHÒNG 2) ───
+  function fetchSubtitlesFromBackground(url) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'DUB_GET_SUBTITLES', url }, (res) => {
+        if (res && res.ok && res.data) {
+          const raw = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+          if (raw && raw.length > 10) {
+            resolve(raw);
+            return;
+          }
+        }
+        resolve(null);
+      });
+    });
+  }
+
+  // ─── BỘ PHÂN TÍCH PHỤ ĐỀ ĐA ĐỊNH DẠNG (JSON3 & XML TIMEDTEXT) ───
+  function parseAnySubtitles(raw) {
+    if (!raw) return [];
+
+    // 1. Thử phân tích JSON3
+    try {
+      const json = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (json && Array.isArray(json.events) && json.events.length > 0) {
+        const cues = [];
+        json.events.forEach((ev, idx) => {
+          if (!ev.segs || !ev.segs.length) return;
+          const text = ev.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim();
+          if (!text || text === '\n') return;
+          const start = (ev.tStartMs || 0) / 1000;
+          const duration = (ev.dDurationMs || 1500) / 1000;
+          cues.push({
+            id: idx,
+            start: start,
+            duration: duration,
+            end: start + duration,
+            text: text,
+            viText: '',
+            audioBuffer: null,
+            translating: false,
+            synthesizing: false
+          });
+        });
+        if (cues.length > 0) return cues;
+      }
+    } catch (e) {}
+
+    // 2. Thử phân tích XML TimedText (<p t="..." d="..."> hoặc <text start="..." dur="...">)
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(raw, 'text/xml');
+      const cues = [];
+
+      const pTags = doc.querySelectorAll('p');
+      if (pTags && pTags.length > 0) {
+        pTags.forEach((p, idx) => {
+          const text = (p.textContent || '').replace(/\n/g, ' ').trim();
+          if (!text) return;
+          const start = (parseFloat(p.getAttribute('t')) || 0) / 1000;
+          const duration = (parseFloat(p.getAttribute('d')) || 1500) / 1000;
+          cues.push({
+            id: idx,
+            start: start,
+            duration: duration,
+            end: start + duration,
+            text: text,
+            viText: '',
+            audioBuffer: null,
+            translating: false,
+            synthesizing: false
+          });
+        });
+        if (cues.length > 0) return cues;
+      }
+
+      const textTags = doc.querySelectorAll('text');
+      if (textTags && textTags.length > 0) {
+        textTags.forEach((t, idx) => {
+          const text = (t.textContent || '').replace(/\n/g, ' ').trim();
+          if (!text) return;
+          const start = parseFloat(t.getAttribute('start')) || 0;
+          const duration = parseFloat(t.getAttribute('dur')) || 1.5;
+          cues.push({
+            id: idx,
+            start: start,
+            duration: duration,
+            end: start + duration,
+            text: text,
+            viText: '',
+            audioBuffer: null,
+            translating: false,
+            synthesizing: false
+          });
+        });
+        if (cues.length > 0) return cues;
+      }
+    } catch (e) {}
+
+    return [];
+  }
+
+  // ─── TẢI PHỤ ĐỀ TỪ YOUTUBE TIMEDTEXT API (ĐA TẦNG DÒ TÌM) ───
   async function loadSubtitlesForCurrentVideo() {
     const videoId = getVideoId();
     if (!videoId) return;
     D.currentVideoId = videoId;
+    D.cues = [];
     showToast('Đang kết nối phụ đề...', 'loading');
 
-    // 1. Kiểm tra danh sách tracks đã có chưa
-    if (!D.captionTracks || D.captionTracks.length === 0) {
+    // 1. Dò tìm danh sách track từ main world (thử tối đa 8 lần = 2.4s)
+    let tracks = D.captionTracks || [];
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      if (tracks && tracks.length > 0) break;
       window.postMessage({ type: 'UB_GET_CAPTIONS' }, '*');
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 300));
+      tracks = D.captionTracks || [];
     }
 
-    // 2. Chọn track tốt nhất (Ưu tiên tiếng Anh manual -> English ASR -> Ngôn ngữ khác)
-    let bestTrack = null;
-    if (D.captionTracks && D.captionTracks.length > 0) {
-      bestTrack = D.captionTracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
-        || D.captionTracks.find(t => t.languageCode === 'en')
-        || D.captionTracks.find(t => t.vssId && t.vssId.includes('en'))
-        || D.captionTracks[0];
-    }
-
-    let timedTextUrl = '';
-    if (bestTrack && bestTrack.baseUrl) {
-      timedTextUrl = bestTrack.baseUrl.includes('fmt=json3') ? bestTrack.baseUrl : (bestTrack.baseUrl + '&fmt=json3');
-    } else {
-      // Dự phòng endpoint chuẩn YouTube
-      timedTextUrl = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3`;
-    }
-
-    chrome.runtime.sendMessage({ type: 'DUB_GET_SUBTITLES', url: timedTextUrl }, response => {
-      if (response && response.ok && response.data) {
-        parseSubtitleData(response.data);
-      } else {
-        // Thử tìm phụ đề tự động (ASR)
-        const fallbackUrl = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=json3`;
-        chrome.runtime.sendMessage({ type: 'DUB_GET_SUBTITLES', url: fallbackUrl }, fallbackRes => {
-          if (fallbackRes && fallbackRes.ok && fallbackRes.data) {
-            parseSubtitleData(fallbackRes.data);
-          } else {
-            showToast('Không tìm thấy phụ đề cho video này', 'error');
-          }
-        });
-      }
-    });
-  }
-
-  // ─── PHÂN TÍCH VÀ ĐO THUẬT TOÁN ĐỘ DÀI CÂU (DURATION MATCHING PARSER) ───
-  function parseSubtitleData(data) {
-    let events = [];
-    if (data && Array.isArray(data.events)) {
-      events = data.events;
-    } else if (typeof data === 'string') {
-      try {
-        const parsed = JSON.parse(data);
-        events = parsed.events || [];
-      } catch (e) {}
-    }
-
-    if (!events || events.length === 0) {
-      showToast('Video không có dữ liệu lời thoại', 'error');
+    if (!tracks || tracks.length === 0) {
+      showToast('Video không có phụ đề hoặc đang tải...', 'error');
       return;
     }
 
-    const parsedCues = [];
-    events.forEach((ev, idx) => {
-      if (!ev.segs || !ev.segs.length) return;
-      const text = ev.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim();
-      if (!text || text === '\n') return;
+    // 2. Xếp thứ tự ưu tiên các track:
+    // Priority 1: Tiếng Việt (nếu có sẵn tiếng Việt, khỏi cần dịch máy)
+    // Priority 2: Tiếng Anh chuẩn (manual)
+    // Priority 3: Tiếng Anh tự động (ASR)
+    // Priority 4: Bất kỳ ngôn ngữ nào có sẵn
+    const viTrack = tracks.find(t => t.languageCode === 'vi' || (t.vssId && t.vssId.includes('.vi')));
+    const enManual = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr');
+    const enAsr = tracks.find(t => t.languageCode === 'en' || (t.vssId && t.vssId.includes('en')));
+    const fallbackTrack = tracks[0];
 
-      const start = (ev.tStartMs || 0) / 1000;
-      const duration = (ev.dDurationMs || 1500) / 1000;
+    const chosenTrack = viTrack || enManual || enAsr || fallbackTrack;
+    const isAlreadyVietnamese = Boolean(viTrack && chosenTrack === viTrack);
 
-      parsedCues.push({
-        id: idx,
-        start: start,
-        duration: duration,
-        end: start + duration,
-        text: text,
-        viText: '',
-        audioBuffer: null,
-        translating: false,
-        synthesizing: false
-      });
-    });
+    showToast(`Đã tìm thấy phụ đề: ${chosenTrack.name?.simpleText || chosenTrack.languageCode || 'Gốc'}`, 'loading');
 
-    // Tính toán khoảng lặng và mục tiêu thời lượng hiệu dụng cho từng câu
+    // 3. Các định dạng URL cần thử lấy dữ liệu
+    const base = chosenTrack.baseUrl;
+    const urlsToTry = [
+      base.includes('fmt=json3') ? base : (base + '&fmt=json3'),
+      base.replace(/&fmt=[^&]+/, '') // raw XML
+    ];
+
+    // Nếu là track ngôn ngữ khác và có cờ isTranslatable:
+    if (!isAlreadyVietnamese && chosenTrack.isTranslatable) {
+      urlsToTry.unshift(base + '&tlang=vi&fmt=json3'); // YouTube auto-translate sang Tiếng Việt
+      urlsToTry.push(base + '&tlang=en&fmt=json3');   // YouTube auto-translate sang Tiếng Anh
+    }
+
+    let parsedCues = [];
+    for (const url of urlsToTry) {
+      // Thử 1: Fetch trực tiếp từ Main World (Có đủ cookie session của YouTube)
+      let raw = await fetchSubtitlesFromMainWorld(url);
+      if (!raw) {
+        // Thử 2: Fetch qua Background Service Worker
+        raw = await fetchSubtitlesFromBackground(url);
+      }
+
+      if (raw) {
+        parsedCues = parseAnySubtitles(raw);
+        if (parsedCues.length > 0) {
+          if (url.includes('tlang=vi') || isAlreadyVietnamese) {
+            parsedCues.forEach(c => { c.viText = c.text; });
+          }
+          break;
+        }
+      }
+    }
+
+    if (!parsedCues || parsedCues.length === 0) {
+      showToast('Không tải được nội dung phụ đề', 'error');
+      return;
+    }
+
+    // 4. Áp dụng thuật toán đo thời lượng 4 lớp (Effective Target & Max Syllables)
     for (let i = 0; i < parsedCues.length; i++) {
       const cue = parsedCues[i];
       const nextStart = parsedCues[i + 1] ? parsedCues[i + 1].start : (cue.end + 2.0);
       cue.gap = Math.max(0, nextStart - cue.end);
-      
-      // LỚP 2: Tận dụng 70% khoảng lặng giữa 2 câu
       cue.effectiveTarget = cue.duration + Math.min(0.7 * cue.gap, 0.6);
-      
-      // LỚP 1: Ngân sách âm tiết mục tiêu (Tối đa ~4.0 âm tiết/giây)
       cue.maxSyllables = Math.max(3, Math.round(cue.effectiveTarget * 4.0));
     }
 
     D.cues = parsedCues;
     showToast(`Đã sẵn sàng lồng tiếng (${D.cues.length} câu)`, 'success');
+
+    // Bắt đầu xử lý hàng đợi câu nói ngay
+    const video = document.querySelector('video');
+    if (video) processQueue(video.currentTime);
   }
 
   // ─── THUẬT TOÁN RÚT GỌN TỪ ĐỆM TIẾNG VIỆT (TEXT CONDENSATION) ───

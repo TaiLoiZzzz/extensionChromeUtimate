@@ -135,24 +135,65 @@
 
   function sendCaptionsToIsolatedWorld(tracks) {
     if (!tracks || !tracks.length) {
-      tracks = window.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || cachedCaptionTracks;
+      // 1. mp.getPlayerResponse() (Cách chuẩn xác và mới nhất của YouTube player)
+      try {
+        const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        if (mp && typeof mp.getPlayerResponse === 'function') {
+          const resp = mp.getPlayerResponse();
+          tracks = resp?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        }
+      } catch (e) {}
+
+      // 2. window.ytInitialPlayerResponse
+      if (!tracks || !tracks.length) {
+        tracks = window.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      }
+
+      // 3. mp.getOption('captions', 'tracklist')
       if (!tracks || !tracks.length) {
         try {
-          const mp = document.getElementById('movie_player');
+          const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
           if (mp && typeof mp.getOption === 'function') {
-            tracks = mp.getOption('captions', 'tracklist') || [];
+            const list = mp.getOption('captions', 'tracklist');
+            if (Array.isArray(list) && list.length > 0) {
+              tracks = list.map(t => ({
+                baseUrl: t.baseUrl || t.url || '',
+                languageCode: t.languageCode || (t.vss_id ? t.vss_id.replace(/^[a\.]*/, '') : 'en'),
+                name: t.name || t.displayName || { simpleText: t.languageName || 'Auto' },
+                vssId: t.vssId || t.vss_id || '',
+                kind: t.kind || '',
+                isTranslatable: t.is_translateable !== false
+              }));
+            }
           }
-        } catch(e) {}
+        } catch (e) {}
+      }
+
+      // 4. cached tracks
+      if (!tracks || !tracks.length) {
+        tracks = cachedCaptionTracks;
       }
     }
+
     if (tracks && tracks.length > 0) {
-      cachedCaptionTracks = tracks;
-      window.postMessage({ type: 'UB_CAPTIONS_DATA', tracks }, '*');
+      const normalized = tracks.map(t => ({
+        baseUrl: t.baseUrl || t.url || '',
+        languageCode: t.languageCode || 'en',
+        name: typeof t.name === 'string' ? { simpleText: t.name } : (t.name || { simpleText: 'English' }),
+        vssId: t.vssId || t.vss_id || '',
+        kind: t.kind || '',
+        isTranslatable: t.isTranslatable !== false
+      })).filter(t => Boolean(t.baseUrl));
+
+      if (normalized.length > 0) {
+        cachedCaptionTracks = normalized;
+        window.postMessage({ type: 'UB_CAPTIONS_DATA', tracks: normalized }, '*');
+      }
     }
   }
 
   // Lắng nghe lệnh đổi mức âm lượng, Ducking và lấy phụ đề từ Content Script
-  window.addEventListener('message', (event) => {
+  window.addEventListener('message', async (event) => {
     if (!event.data) return;
     if (event.data.type === 'UB_SET_AUDIO_GAIN') {
       currentGainValue = parseFloat(event.data.gain) || 2.2;
@@ -168,6 +209,16 @@
       }
     } else if (event.data.type === 'UB_GET_CAPTIONS') {
       sendCaptionsToIsolatedWorld();
+    } else if (event.data.type === 'UB_FETCH_SUBTITLES_DIRECT') {
+      const reqUrl = event.data.url;
+      const reqId = event.data.requestId;
+      try {
+        const res = await window.fetch(reqUrl, { credentials: 'include' });
+        const text = await res.text();
+        window.postMessage({ type: 'UB_SUBTITLES_FETCHED', requestId: reqId, data: text, success: true }, '*');
+      } catch (err) {
+        window.postMessage({ type: 'UB_SUBTITLES_FETCHED', requestId: reqId, error: err.message, success: false }, '*');
+      }
     }
   });
 
@@ -218,6 +269,9 @@
       try {
         const clone = response.clone();
         const data = await clone.json();
+        if (data && data.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+          sendCaptionsToIsolatedWorld(data.captions.playerCaptionsTracklistRenderer.captionTracks);
+        }
         if (data && (data.adPlacements || data.playerAds || data.adSlots)) {
           cleanAdData(data);
           return new Response(JSON.stringify(data), {
@@ -235,6 +289,9 @@
   JSON.parse = function () {
     const data = originalJSONParse.apply(this, arguments);
     if (data && typeof data === 'object') {
+      if (data.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+        sendCaptionsToIsolatedWorld(data.captions.playerCaptionsTracklistRenderer.captionTracks);
+      }
       if (data.adPlacements || data.playerAds || data.adSlots) cleanAdData(data);
     }
     return data;
