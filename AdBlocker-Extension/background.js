@@ -161,8 +161,12 @@ async function fetchGoogleTranslate(text, targetLang = 'vi') {
 
 // ─── FETCH GEMINI AI TRANSLATE VỚI RÀNG BUỘC ÂM TIẾT / THỜI LƯỢNG ───
 async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
-  const key = apiKey || 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M';
-  const models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+  // Nếu không có API Key riêng hợp lệ của người dùng, chuyển thẳng sang Google Translate siêu tốc (~30ms)
+  if (!apiKey || apiKey.includes('AIzaSyCklhdUMekEOmueB6uqa7B7')) {
+    return await fetchGoogleTranslate(text, 'vi');
+  }
+  const key = apiKey;
+  const models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
   let constraint = '';
   if (targetDuration && targetDuration > 0) {

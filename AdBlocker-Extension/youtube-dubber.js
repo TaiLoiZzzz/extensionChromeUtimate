@@ -10,9 +10,9 @@
   // ─── TRẠNG THÁI HỆ THỐNG ───
   const D = {
     enabled: false,
-    provider: 'gemini', // 'gemini' | 'google'
-    geminiApiKey: 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M',
-    voice: 'vi-VN-HoaiMyNeural', // 'vi-VN-HoaiMyNeural' (Nữ) | 'vi-VN-NamMinhNeural' (Nam)
+    provider: 'google', // Mặc định Google Translate siêu tốc (~30ms) không cần API key
+    geminiApiKey: '',
+    voice: 'vi-VN-NamMinhNeural', // Mặc định Nam Minh Neural trầm ấm, chuẩn tự nhiên
     duckLevel: 0.15,
     dubVolume: 1.0,
     cues: [],
@@ -632,28 +632,12 @@
     const initialBatch = D.cues.filter(c => c.end >= curTime && c.start <= curTime + 22).slice(0, 4);
 
     if (initialBatch.length > 0) {
-      const wasPlaying = video && !video.paused;
-
-      // Nếu video đang chạy, tạm dừng nhẹ 1.2s để nạp trước bản dịch trọn vẹn
-      if (wasPlaying) {
-        try { video.pause(); } catch (e) {}
-      }
-
-      showToast('Đang nạp trước bản dịch & giọng đọc AI (chờ 1 giây)...', 'loading');
-
-      // Chạy dịch và tổng hợp song song toàn bộ batch đầu tiên
-      const tasks = initialBatch.map(c => ensureCueReady(c));
-
-      await Promise.race([
-        Promise.all(tasks),
-        new Promise(r => setTimeout(r, 2000))
-      ]);
-
-      if (wasPlaying && video) {
-        try { video.play(); } catch (e) {}
-      }
-
-      showToast(`Đã sẵn sàng thuyết minh (${initialBatch.length} câu đã nạp)`, 'normal');
+      showToast(`Đang sẵn sàng thuyết minh (${initialBatch.length} câu)...`, 'loading');
+      // Nạp song song trong nền, TUYỆT ĐỐI không làm dừng video của người dùng
+      initialBatch.forEach(c => ensureCueReady(c));
+      setTimeout(() => {
+        hideToast();
+      }, 1500);
     }
 
     isBufferingInitial = false;
@@ -767,16 +751,15 @@
     const cueIndex = D.cues.findIndex(c => syncT >= c.start && t < (c.end + (c.gap || 0.4)));
 
     if (cueIndex !== -1 && cueIndex !== D.activeCueIndex) {
+      D.activeCueIndex = cueIndex; // ĐÁNH DẤU NGAY LẬP TỨC để tránh gọi lặp lại trong vòng lặp RAF
       const cue = D.cues[cueIndex];
       
       if (cue.audioBuffer) {
-        D.activeCueIndex = cueIndex;
         playCueAudio(cue);
       } else {
         // Nếu câu này chưa nạp xong: ưu tiên nạp và chỉ phát khi có audioBuffer chuẩn Microsoft Neural
         ensureCueReady(cue).then((buf) => {
-          if (buf && D.enabled && !D.isSpeaking && Math.abs(video.currentTime - cue.start) < (cue.duration + 2.0)) {
-            D.activeCueIndex = cueIndex;
+          if (buf && D.enabled && !D.isSpeaking && Math.abs(video.currentTime - cue.start) < (cue.duration + 2.5)) {
             playCueAudio(cue);
           }
         });
