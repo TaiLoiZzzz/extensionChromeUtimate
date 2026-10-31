@@ -528,12 +528,13 @@ async function fetchBackgroundEdgeTTS(text, voice) {
         ws.send(ssmlMsg);
       };
 
-      ws.onmessage = event => {
-        if (typeof event.data === 'string') {
-          if (event.data.includes('Path:turn.end')) {
+      ws.onmessage = async event => {
+        let rawData = event.data;
+        if (typeof rawData === 'string') {
+          if (rawData.includes('Path:turn.end')) {
             isDone = true;
             clearTimeout(timer);
-            ws.close();
+            try { ws.close(); } catch(e) {}
 
             if (audioChunks.length === 0) {
               reject(new Error('No audio received'));
@@ -557,14 +558,22 @@ async function fetchBackgroundEdgeTTS(text, voice) {
             const base64 = btoa(binary);
             resolve(base64);
           }
-        } else if (event.data instanceof ArrayBuffer) {
-          if (event.data.byteLength > 2) {
-            const view = new DataView(event.data);
-            const headerLen = view.getInt16(0);
-            if (event.data.byteLength > headerLen + 2) {
-              audioChunks.push(event.data.slice(headerLen + 2));
+        } else {
+          try {
+            let arrayBuffer = null;
+            if (rawData instanceof ArrayBuffer) {
+              arrayBuffer = rawData;
+            } else if (rawData instanceof Blob) {
+              arrayBuffer = await rawData.arrayBuffer();
             }
-          }
+            if (arrayBuffer && arrayBuffer.byteLength > 2) {
+              const view = new DataView(arrayBuffer);
+              const headerLen = view.getUint16(0, false);
+              if (arrayBuffer.byteLength > headerLen + 2) {
+                audioChunks.push(arrayBuffer.slice(headerLen + 2));
+              }
+            }
+          } catch (e) {}
         }
       };
 
@@ -584,6 +593,35 @@ async function fetchBackgroundEdgeTTS(text, voice) {
       reject(e);
     }
   });
+}
+
+// ─── TỔNG HỢP ÂM THANH DỰ PHÒNG GOOGLE TTS QUA BACKGROUND SERVICE WORKER (KHÔNG BỊ CSP) ───
+async function fetchBackgroundGoogleTTS(text) {
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(text)}`;
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+    }
+  });
+  if (!res.ok) throw new Error('Google TTS HTTP failed: ' + res.status);
+  const arrayBuf = await res.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuf);
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// ─── TỰ ĐỘNG THỬ EDGE-TTS TRƯỚC, NẾU LỖI CHUYỂN DỰ PHÒNG KHÔNG BAO GIỜ BỊ MẤT TIẾNG ───
+async function synthesizeTTSWithFallback(text, voice) {
+  try {
+    return await fetchBackgroundEdgeTTS(text, voice);
+  } catch (err) {
+    console.warn('[TTS] Edge-TTS không khả dụng, dùng Google TTS dự phòng trong service worker:', err);
+    return await fetchBackgroundGoogleTTS(text);
+  }
 }
 
 // ─── TẢI PHỤ ĐỀ YOUTUBE BẰNG INNERTUBE API (CHUẨN XÁC 100%, KHÔNG CẦN COOKIE) ───
@@ -711,7 +749,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'DUB_SYNTHESIZE_TTS') {
-    fetchBackgroundEdgeTTS(msg.text, msg.voice)
+    synthesizeTTSWithFallback(msg.text, msg.voice)
       .then(audioBase64 => sendResponse({ ok: true, audioBase64 }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;

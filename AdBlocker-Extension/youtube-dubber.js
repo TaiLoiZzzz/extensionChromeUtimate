@@ -588,8 +588,7 @@
             resolve(buffer);
           })
           .catch(err => {
-            console.warn('[Dubber] Edge-TTS lần 1 thất bại, thử lại lần 2...', err);
-            // Thử lại lần 2 với Edge-TTS
+            console.warn('[Dubber] Thử lại tổng hợp âm thanh...', err);
             fetchEdgeTTSAudio(viText, D.voice)
               .then(decodeAudioData)
               .then(buffer => {
@@ -599,21 +598,9 @@
                 resolve(buffer);
               })
               .catch(err2 => {
-                console.warn('[Dubber] Edge-TTS thất bại 2 lần, chuyển dự phòng:', err2);
-                const gUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(viText)}`;
-                fetch(gUrl)
-                  .then(r => r.arrayBuffer())
-                  .then(decodeAudioData)
-                  .then(gBuf => {
-                    cue.synthesizing = false;
-                    cue.audioBuffer = gBuf;
-                    cue.silenceOffset = 0;
-                    resolve(gBuf);
-                  })
-                  .catch(() => {
-                    cue.synthesizing = false;
-                    resolve(null);
-                  });
+                console.error('[Dubber] Tổng hợp âm thanh thất bại:', err2);
+                cue.synthesizing = false;
+                resolve(null);
               });
           });
       });
