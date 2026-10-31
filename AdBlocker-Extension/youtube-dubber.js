@@ -79,8 +79,27 @@
       if (D.enabled && (!D.cues || D.cues.length === 0)) {
         loadSubtitlesForCurrentVideo();
       }
+    } else if (event.data.type === 'UB_CAPTIONS_FETCHED_LIVE' && event.data.data) {
+      const liveCues = parseAnySubtitles(event.data.data);
+      if (liveCues && liveCues.length > 0 && (!D.cues || D.cues.length === 0)) {
+        applyTimingToCues(liveCues);
+        D.cues = liveCues;
+        showToast(`Đã nhận phụ đề trực tiếp (${D.cues.length} câu)`, 'success');
+        const v = document.querySelector('video');
+        if (v) processQueue(v.currentTime);
+      }
     }
   });
+
+  function applyTimingToCues(cues) {
+    for (let i = 0; i < cues.length; i++) {
+      const cue = cues[i];
+      const nextStart = cues[i + 1] ? cues[i + 1].start : (cue.end + 2.0);
+      cue.gap = Math.max(0, nextStart - cue.end);
+      cue.effectiveTarget = cue.duration + Math.min(0.7 * cue.gap, 0.6);
+      cue.maxSyllables = Math.max(3, Math.round(cue.effectiveTarget * 4.0));
+    }
+  }
 
   // ─── LẤY VIDEO ID HIỆN TẠI ───
   function getVideoId() {
@@ -228,6 +247,10 @@
     D.cues = [];
     showToast('Đang kết nối phụ đề...', 'loading');
 
+    // Kích hoạt YouTube nạp module phụ đề nếu chưa nạp
+    window.postMessage({ type: 'UB_FORCE_LOAD_CAPTIONS' }, '*');
+    observeLiveDomCaptions();
+
     // 1. Dò tìm danh sách track từ main world (thử tối đa 8 lần = 2.4s)
     let tracks = D.captionTracks || [];
     for (let attempt = 1; attempt <= 8; attempt++) {
@@ -238,7 +261,9 @@
     }
 
     if (!tracks || tracks.length === 0) {
-      showToast('Video không có phụ đề hoặc đang tải...', 'error');
+      // Nếu không có track từ API, theo dõi trực tiếp phụ đề trên màn hình (DOM)
+      observeLiveDomCaptions();
+      showToast('Đang đọc trực tiếp phụ đề trên màn hình', 'loading');
       return;
     }
 
@@ -656,57 +681,185 @@
     setInterval(checkChange, 1500);
   }
 
+  // ─── THEO DÕI PHỤ ĐỀ TRỰC TIẾP TRÊN MÀN HÌNH (DOM FALLBACK) ───
+  let lastLiveCaptionText = '';
+  function observeLiveDomCaptions() {
+    const container = document.querySelector('.ytp-caption-window-container') || document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    if (!container || window.__ub_dom_obs) return;
+
+    window.__ub_dom_obs = new MutationObserver(() => {
+      if (!D.enabled) return;
+      // Chỉ can thiệp nếu chưa có cues tải qua timedtext
+      if (D.cues && D.cues.length > 5) return;
+
+      const segs = document.querySelectorAll('.ytp-caption-segment');
+      if (segs.length > 0) {
+        const text = Array.from(segs).map(s => s.textContent || '').join(' ').trim();
+        if (text && text.length > 1 && text !== lastLiveCaptionText) {
+          lastLiveCaptionText = text;
+          handleLiveDomCaption(text);
+        }
+      }
+    });
+
+    window.__ub_dom_obs.observe(container, { childList: true, subtree: true, characterData: true });
+  }
+
+  function handleLiveDomCaption(text) {
+    if (!D.enabled || !text) return;
+    const isVietnamese = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(text);
+
+    if (isVietnamese) {
+      const cue = {
+        id: Date.now(),
+        start: 0,
+        duration: 3.0,
+        effectiveTarget: 3.0,
+        maxSyllables: 15,
+        text: text,
+        viText: text,
+        audioBuffer: null
+      };
+      playCueAudio(cue);
+    } else {
+      // Dịch sang tiếng Việt rồi đọc
+      chrome.runtime.sendMessage({
+        type: 'DUB_TRANSLATE',
+        text: text,
+        targetDuration: 3.0,
+        provider: D.provider,
+        apiKey: D.geminiApiKey
+      }, resp => {
+        const viText = resp && resp.ok && resp.result ? resp.result : text;
+        const cue = {
+          id: Date.now(),
+          start: 0,
+          duration: 3.0,
+          effectiveTarget: 3.0,
+          maxSyllables: 15,
+          text: text,
+          viText: viText,
+          audioBuffer: null
+        };
+        playCueAudio(cue);
+      });
+    }
+  }
+
+  // ─── NÚT NỔI TRỰC TIẾP TRÊN KHUNG VIDEO (100% LUÔN THẤY) ───
+  function injectFloatingDubPill() {
+    const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    if (!player) return;
+
+    let pill = document.getElementById('ub-floating-dub-pill');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'ub-floating-dub-pill';
+      pill.style.cssText = `
+        position: absolute !important;
+        top: 14px !important;
+        right: 16px !important;
+        z-index: 60 !important;
+        cursor: pointer !important;
+        user-select: none !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        padding: 6px 12px !important;
+        border-radius: 20px !important;
+        backdrop-filter: blur(8px) !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        transition: all 0.25s ease !important;
+      `;
+      pill.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        initAudioCtx();
+        const newEnabled = !D.enabled;
+        chrome.storage.local.set({ dubbingEnabled: newEnabled });
+      };
+      player.appendChild(pill);
+    }
+
+    if (D.enabled) {
+      pill.style.background = 'rgba(0, 200, 83, 0.88)';
+      pill.style.color = '#ffffff';
+      pill.style.border = '1.5px solid #00e676';
+      pill.style.boxShadow = '0 0 15px rgba(0, 230, 118, 0.6)';
+      pill.innerHTML = `<span style="font-size:14px;">🎙️</span><span>Thuyết minh AI: BẬT</span>`;
+    } else {
+      pill.style.background = 'rgba(20, 20, 26, 0.8)';
+      pill.style.color = '#eeeeee';
+      pill.style.border = '1px solid rgba(255, 255, 255, 0.25)';
+      pill.style.boxShadow = '0 4px 12px rgba(0,0,0,0.5)';
+      pill.innerHTML = `<span style="font-size:14px;opacity:0.8;">🎙️</span><span>Lồng tiếng AI: TẮT</span>`;
+    }
+  }
+
   // ─── GIAO DIỆN NÚT BẤM TRÊN THANH ĐIỀU KHIỂN YOUTUBE ───
   function injectDubButton() {
     const rightControls = document.querySelector('.ytp-right-controls');
-    if (!rightControls || document.getElementById('ub-ytp-dub-btn')) return;
+    if (!rightControls) return;
 
-    const btn = document.createElement('button');
-    btn.id = 'ub-ytp-dub-btn';
-    btn.className = 'ytp-button';
-    btn.setAttribute('title', 'Lồng tiếng Tiếng Việt AI (Dubbing)');
-    btn.style.cssText = `
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 48px;
-      height: 100%;
-      vertical-align: top;
-      cursor: pointer;
-      user-select: none;
-      transition: all 0.2s;
-    `;
+    let btn = document.getElementById('ub-ytp-dub-btn');
+    if (btn && rightControls.contains(btn)) {
+      updateDubButtonUI();
+      return;
+    }
+
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'ub-ytp-dub-btn';
+      btn.className = 'ytp-button';
+      btn.setAttribute('title', 'Lồng tiếng Tiếng Việt AI (Dubbing)');
+      btn.style.cssText = `
+        position: relative !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 48px !important;
+        height: 100% !important;
+        vertical-align: top !important;
+        cursor: pointer !important;
+        user-select: none !important;
+        padding: 0 !important;
+        border: none !important;
+        background: transparent !important;
+      `;
+
+      btn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        initAudioCtx();
+        const newEnabled = !D.enabled;
+        chrome.storage.local.set({ dubbingEnabled: newEnabled });
+      };
+    }
 
     btn.innerHTML = `
       <div id="ub-dub-icon-box" style="
         display: flex;
         align-items: center;
-        gap: 2px;
-        padding: 3px 6px;
+        gap: 3px;
+        padding: 2px 6px;
         border-radius: 6px;
-        background: ${D.enabled ? 'rgba(0, 200, 83, 0.2)' : 'rgba(255,255,255,0.1)'};
-        border: 1px solid ${D.enabled ? '#00c853' : 'rgba(255,255,255,0.2)'};
-        transition: all 0.2s;
+        background: ${D.enabled ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255,255,255,0.15)'};
+        border: 1px solid ${D.enabled ? '#00c853' : 'rgba(255,255,255,0.25)'};
+        box-shadow: ${D.enabled ? '0 0 10px rgba(0,230,118,0.5)' : 'none'};
       ">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="${D.enabled ? '#00c853' : '#fff'}">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="${D.enabled ? '#00c853' : '#ffffff'}">
           <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
           <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
         </svg>
         <span id="ub-dub-btn-label" style="
           font-size: 11px;
           font-weight: 800;
-          color: ${D.enabled ? '#00c853' : '#fff'};
-          letter-spacing: 0.5px;
+          color: ${D.enabled ? '#00c853' : '#ffffff'};
         ">VI</span>
       </div>
     `;
-
-    btn.onclick = () => {
-      initAudioCtx();
-      const newEnabled = !D.enabled;
-      chrome.storage.local.set({ dubbingEnabled: newEnabled });
-    };
 
     // Chèn trước nút cài đặt hoặc toàn màn hình
     const settingsBtn = rightControls.querySelector('.ytp-settings-button');
@@ -718,20 +871,21 @@
   }
 
   function updateDubButtonUI() {
+    injectFloatingDubPill();
     const box = document.getElementById('ub-dub-icon-box');
     const label = document.getElementById('ub-dub-btn-label');
     const svgPath = document.querySelector('#ub-dub-icon-box svg path');
     if (!box || !label) return;
 
     if (D.enabled) {
-      box.style.background = 'rgba(0, 200, 83, 0.25)';
+      box.style.background = 'rgba(0, 200, 83, 0.35)';
       box.style.borderColor = '#00c853';
-      box.style.boxShadow = '0 0 8px rgba(0, 200, 83, 0.5)';
+      box.style.boxShadow = '0 0 8px rgba(0, 200, 83, 0.6)';
       label.style.color = '#00c853';
       if (svgPath) svgPath.style.fill = '#00c853';
     } else {
-      box.style.background = 'rgba(255,255,255,0.1)';
-      box.style.borderColor = 'rgba(255,255,255,0.2)';
+      box.style.background = 'rgba(255,255,255,0.15)';
+      box.style.borderColor = 'rgba(255,255,255,0.25)';
       box.style.boxShadow = 'none';
       label.style.color = '#ffffff';
       if (svgPath) svgPath.style.fill = '#ffffff';
@@ -816,8 +970,9 @@
     observeVideoChanges();
     setInterval(() => {
       injectDubButton();
+      injectFloatingDubPill();
       bindVideoEvents();
-    }, 1000);
+    }, 600);
   }
 
   if (document.readyState === 'loading') {

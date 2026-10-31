@@ -219,8 +219,42 @@
       } catch (err) {
         window.postMessage({ type: 'UB_SUBTITLES_FETCHED', requestId: reqId, error: err.message, success: false }, '*');
       }
+    } else if (event.data.type === 'UB_FORCE_LOAD_CAPTIONS') {
+      try {
+        const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        if (mp) {
+          if (typeof mp.loadModule === 'function') mp.loadModule('captions');
+          if (typeof mp.getOption === 'function') {
+            const list = mp.getOption('captions', 'tracklist') || [];
+            const best = list.find(t => t.languageCode === 'en' || t.languageCode === 'vi') || list[0];
+            if (best && typeof mp.setOption === 'function') {
+              mp.setOption('captions', 'track', best);
+            }
+          }
+        }
+      } catch (e) {}
     }
   });
+
+  // Hook XMLHttpRequest để bắt các gói tin timedtext nếu YouTube dùng XHR
+  const origXhrOpen = XMLHttpRequest.prototype.open;
+  const origXhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this._ubUrl = typeof url === 'string' ? url : '';
+    return origXhrOpen.apply(this, [method, url, ...rest]);
+  };
+  XMLHttpRequest.prototype.send = function(...args) {
+    if (this._ubUrl && this._ubUrl.includes('/api/timedtext')) {
+      this.addEventListener('load', () => {
+        try {
+          if (this.responseText && this.responseText.length > 20) {
+            window.postMessage({ type: 'UB_CAPTIONS_FETCHED_LIVE', data: this.responseText, url: this._ubUrl }, '*');
+          }
+        } catch (e) {}
+      });
+    }
+    return origXhrSend.apply(this, args);
+  };
 
   setInterval(() => {
     const video = document.querySelector('video');
@@ -264,6 +298,16 @@
   window.fetch = async function (resource, init) {
     const response = await origFetch.apply(this, arguments);
     const url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+
+    if (url.includes('/api/timedtext')) {
+      try {
+        const clone = response.clone();
+        const text = await clone.text();
+        if (text && text.length > 20) {
+          window.postMessage({ type: 'UB_CAPTIONS_FETCHED_LIVE', data: text, url }, '*');
+        }
+      } catch (err) {}
+    }
 
     if (url.includes('/youtubei/v1/player')) {
       try {
