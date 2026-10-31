@@ -1,16 +1,6 @@
 // UltraBlock Pro - Popup Script
 
-const KEYS = ['autoTranslate','blockAds','blockBetting','removeCookieBanners','ytSkipAds','ytAutoHD','ytRemoveShorts'];
-
-function fmtNum(n) {
-  n = n || 0;
-  return n >= 1000 ? (n/1000).toFixed(1)+'K' : String(n);
-}
-function fmtKB(kb) {
-  kb = kb || 0;
-  if (kb >= 1024) return (kb/1024).toFixed(1)+'MB';
-  return Math.round(kb)+'KB';
-}
+const KEYS = ['autoTranslate', 'ytAutoHD'];
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -18,14 +8,28 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(null, data => {
     const enabled = data.enabled !== false;
     document.getElementById('masterToggle').checked = enabled;
-    document.getElementById('statusDot').className = 'stat-dot' + (enabled ? '' : ' off');
-    document.getElementById('countToday').textContent = fmtNum(data.blockedToday);
-    document.getElementById('savedKB').textContent = fmtKB(data.savedKB);
 
     KEYS.forEach(key => {
       const el = document.getElementById(key);
       if (el) el.checked = data[key] !== false;
     });
+
+    // Theme selector
+    const currentTheme = data.ytTheme || 'cyberpunk';
+    document.querySelectorAll('.theme-pill').forEach(pill => {
+      const theme = pill.dataset.theme;
+      if (theme === currentTheme) {
+        pill.classList.add('active');
+      } else {
+        pill.classList.remove('active');
+      }
+    });
+
+    const customInput = document.getElementById('customBgUrlInput');
+    if (currentTheme === 'custom') {
+      customInput.style.display = 'block';
+      customInput.value = data.ytCustomBgUrl || '';
+    }
 
     // Audio Gain
     const gain = parseFloat(data.ytAudioGain) || 2.2;
@@ -39,9 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Master toggle
   document.getElementById('masterToggle').addEventListener('change', e => {
-    const v = e.target.checked;
-    chrome.storage.local.set({ enabled: v });
-    document.getElementById('statusDot').className = 'stat-dot' + (v ? '' : ' off');
+    chrome.storage.local.set({ enabled: e.target.checked });
   });
 
   // Feature toggles
@@ -51,7 +53,33 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Slider kích âm thanh
+  // Xử lý chọn hình nền phong cách (Theme Pills)
+  document.querySelectorAll('.theme-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('.theme-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+
+      const theme = pill.dataset.theme;
+      const customInput = document.getElementById('customBgUrlInput');
+
+      if (theme === 'custom') {
+        customInput.style.display = 'block';
+        customInput.focus();
+      } else {
+        customInput.style.display = 'none';
+        chrome.storage.local.set({ ytTheme: theme });
+      }
+    });
+  });
+
+  // Lưu link hình nền tự chọn
+  const customInput = document.getElementById('customBgUrlInput');
+  customInput?.addEventListener('input', e => {
+    const url = e.target.value.trim();
+    chrome.storage.local.set({ ytTheme: 'custom', ytCustomBgUrl: url });
+  });
+
+  // Slider âm thanh
   const gainSlider = document.getElementById('audioGainSlider');
   const gainVal = document.getElementById('audioGainVal');
   gainSlider?.addEventListener('input', e => {
@@ -61,11 +89,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Xóa cache
-  document.getElementById('clearCacheBtn')?.addEventListener('click', function() {
-    this.textContent = '⏳ Đang xóa...';
+  document.getElementById('clearCacheBtn')?.addEventListener('click', function () {
+    this.textContent = 'Đang xóa...';
     chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' }, () => {
-      this.textContent = '✅ Xong!';
-      setTimeout(() => this.textContent = '🗑 Xóa cache', 1500);
+      this.textContent = 'Đã xong!';
+      setTimeout(() => this.textContent = 'Xóa cache', 1500);
     });
   });
 

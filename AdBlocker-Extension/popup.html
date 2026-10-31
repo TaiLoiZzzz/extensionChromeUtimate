@@ -7,8 +7,8 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 
 body {
-  width: 310px;
-  background: #111;
+  width: 320px;
+  background: #0f1015;
   color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
@@ -21,7 +21,8 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 13px 16px;
-  border-bottom: 1px solid #222;
+  background: #15161e;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .brand {
   display: flex;
@@ -34,6 +35,7 @@ body {
   border-radius: 9px;
   display: flex; align-items: center; justify-content: center;
   font-size: 17px;
+  font-weight: 800;
 }
 .brand-name {
   font-size: 15px;
@@ -42,7 +44,7 @@ body {
 }
 .brand-sub {
   font-size: 10px;
-  color: #666;
+  color: #777;
   margin-top: 1px;
 }
 
@@ -51,7 +53,7 @@ body {
 .toggle input { display:none; }
 .t-track {
   position:absolute; inset:0;
-  background:#333;
+  background:#2a2b36;
   border-radius:12px;
   transition:.25s;
 }
@@ -64,86 +66,83 @@ body {
 .toggle input:checked ~ .t-track { background:#00c853; }
 .toggle input:checked ~ .t-thumb { transform:translateX(18px); background:#fff; }
 
-/* ── STAT ── */
-.stat-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 16px 10px;
-  border-bottom: 1px solid #1a1a1a;
-}
-.stat-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: #00c853;
-  box-shadow: 0 0 6px #00c853;
-  flex-shrink: 0;
-  animation: blink 2s infinite;
-}
-.stat-dot.off { background:#444; box-shadow:none; animation:none; }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-.stat-text { font-size: 12px; color: #666; }
-.stat-text strong { color: #00c853; font-weight: 700; }
-.stat-text strong.off { color: #444; }
-
 /* ── SECTION LABEL ── */
 .section-label {
   padding: 10px 16px 5px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  color: #555;
+  color: #00e676;
+  font-weight: 700;
 }
 
-/* ── ITEM ── */
-.item {
+/* ── THEME WALLPAPER SELECTOR BOX ── */
+.theme-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  margin: 6px 14px 10px;
+  padding: 10px 12px;
+}
+.theme-header {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
-  gap: 11px;
-  transition: background .15s;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
-.item:hover { background: #181818; }
-.item-icon { font-size: 16px; width: 20px; text-align:center; flex-shrink:0; }
-.item-body { flex: 1; }
-.item-name { font-size: 12px; font-weight: 600; color: #ddd; }
-.item-desc { font-size: 10px; color: #555; margin-top: 1px; }
-.item label { margin-left:auto; }
+.theme-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #00e676;
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.theme-pill {
+  padding: 6px 4px;
+  background: #181922;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #aaa;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.theme-pill:hover {
+  background: #222330;
+  color: #fff;
+}
+.theme-pill.active {
+  background: rgba(0, 230, 118, 0.15);
+  border-color: #00e676;
+  color: #00e676;
+}
+.custom-bg-input {
+  width: 100%;
+  padding: 6px 10px;
+  background: #15161f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 11px;
+  outline: none;
+  display: none;
+  margin-top: 4px;
+}
+.custom-bg-input:focus {
+  border-color: #00e676;
+}
 
-/* Mini toggle */
-.mtog { position:relative; width:36px; height:20px; cursor:pointer; flex-shrink:0; }
-.mtog input { display:none; }
-.mt-track {
-  position:absolute; inset:0;
-  background:#2a2a2a;
-  border-radius:10px;
-  transition:.2s;
-}
-.mt-thumb {
-  position:absolute; top:3px; left:3px;
-  width:14px; height:14px;
-  background:#444; border-radius:50%;
-  transition:.2s;
-}
-.mtog input:checked ~ .mt-track { background:#00c853; }
-.mtog input:checked ~ .mt-thumb { transform:translateX(16px); background:#fff; }
-
-/* YouTube section */
-.yt-label {
-  padding: 10px 16px 5px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: #ff4444;
-  opacity: 0.85;
-}
-.mtog.yt input:checked ~ .mt-track { background:#ff4444; }
-
-/* Audio Booster Box */
+/* ── AUDIO BOOSTER BOX ── */
 .audio-box {
-  background: rgba(255, 68, 68, 0.05);
-  border: 1px solid rgba(255, 68, 68, 0.15);
-  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
   margin: 6px 14px 10px;
   padding: 10px 12px;
 }
@@ -157,21 +156,18 @@ body {
   font-size: 12px;
   font-weight: 700;
   color: #ff5555;
-  display: flex;
-  align-items: center;
-  gap: 5px;
 }
 .audio-val {
   font-size: 12px;
   font-weight: 800;
-  color: #ff4444;
+  color: #ff5555;
 }
 .audio-slider {
   width: 100%;
   -webkit-appearance: none;
   height: 4px;
   border-radius: 2px;
-  background: #333;
+  background: #2a2b36;
   outline: none;
   cursor: pointer;
 }
@@ -179,7 +175,7 @@ body {
   -webkit-appearance: none;
   width: 14px; height: 14px;
   border-radius: 50%;
-  background: #ff4444;
+  background: #ff5555;
   cursor: pointer;
 }
 .audio-desc {
@@ -189,28 +185,61 @@ body {
   line-height: 1.3;
 }
 
-/* ── DIVIDER ── */
-.divider { height: 1px; background: #1c1c1c; margin: 4px 0; }
+/* ── ITEM ── */
+.item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  gap: 11px;
+  transition: background .15s;
+}
+.item:hover { background: #151620; }
+.item-icon { font-size: 15px; width: 20px; text-align:center; flex-shrink:0; }
+.item-body { flex: 1; }
+.item-name { font-size: 12px; font-weight: 600; color: #ddd; }
+.item-desc { font-size: 10px; color: #666; margin-top: 1px; }
+.item label { margin-left:auto; }
 
-/* ── FOOTER ACTIONS ── */
+/* Mini toggle */
+.mtog { position:relative; width:36px; height:20px; cursor:pointer; flex-shrink:0; }
+.mtog input { display:none; }
+.mt-track {
+  position:absolute; inset:0;
+  background:#262734;
+  border-radius:10px;
+  transition:.2s;
+}
+.mt-thumb {
+  position:absolute; top:3px; left:3px;
+  width:14px; height:14px;
+  background:#555; border-radius:50%;
+  transition:.2s;
+}
+.mtog input:checked ~ .mt-track { background:#00c853; }
+.mtog input:checked ~ .mt-thumb { transform:translateX(16px); background:#fff; }
+.mtog.yt input:checked ~ .mt-track { background:#ff4444; }
+
+.divider { height: 1px; background: rgba(255, 255, 255, 0.06); margin: 6px 0; }
+
+/* ── FOOTER ── */
 .footer {
   display: flex;
   gap: 1px;
-  border-top: 1px solid #1c1c1c;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .foot-btn {
   flex: 1;
   padding: 10px;
   background: none;
   border: none;
-  color: #666;
+  color: #777;
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
   transition: color .15s, background .15s;
 }
-.foot-btn:hover { color: #bbb; background: #181818; }
-.foot-btn:first-child { border-right: 1px solid #1c1c1c; }
+.foot-btn:hover { color: #fff; background: #1a1b26; }
+.foot-btn:first-child { border-right: 1px solid rgba(255, 255, 255, 0.08); }
 </style>
 </head>
 <body>
@@ -218,10 +247,10 @@ body {
 <!-- HEADER -->
 <div class="header">
   <div class="brand">
-    <div class="brand-icon">🛡</div>
+    <div class="brand-icon">U</div>
     <div>
       <div class="brand-name">UltraBlock Pro</div>
-      <div class="brand-sub">Chặn ads · Tối ưu âm thanh</div>
+      <div class="brand-sub">Theme YouTube & Studio Audio</div>
     </div>
   </div>
   <label class="toggle">
@@ -231,102 +260,58 @@ body {
   </label>
 </div>
 
-<!-- STAT -->
-<div class="stat-row">
-  <div class="stat-dot" id="statusDot"></div>
-  <div class="stat-text">
-    Đã chặn <strong id="countToday">0</strong> quảng cáo hôm nay
-    &nbsp;·&nbsp; tiết kiệm <strong id="savedKB">0KB</strong>
+<!-- YOUTUBE THEME SELECTOR -->
+<div class="section-label">Giao diện YouTube & Hình nền</div>
+<div class="theme-box">
+  <div class="theme-header">
+    <span class="theme-title">Hình nền phong cách</span>
   </div>
+  <div class="theme-grid">
+    <div class="theme-pill active" data-theme="cyberpunk">Cyberpunk</div>
+    <div class="theme-pill" data-theme="galaxy">Galaxy</div>
+    <div class="theme-pill" data-theme="aurora">Aurora</div>
+    <div class="theme-pill" data-theme="matrix">Matrix</div>
+    <div class="theme-pill" data-theme="sunset">Sunset</div>
+    <div class="theme-pill" data-theme="custom">Tự chọn URL</div>
+  </div>
+  <input type="text" class="custom-bg-input" id="customBgUrlInput" placeholder="Dán link ảnh nền (https://...)">
 </div>
 
-<!-- YOUTUBE -->
-<div class="yt-label">▶ YouTube & Âm Thanh Max</div>
-
 <!-- AUDIO BOOSTER BOX -->
+<div class="section-label" style="color:#ff5555;">Âm thanh Studio Hi-Fi</div>
 <div class="audio-box">
   <div class="audio-header">
-    <span class="audio-title">🎧 Âm Thanh Studio Hi-Fi</span>
+    <span class="audio-title">Khuếch đại Audiophile</span>
     <span class="audio-val" id="audioGainVal">220%</span>
   </div>
   <input type="range" class="audio-slider" id="audioGainSlider" min="1.0" max="3.5" step="0.2" value="2.2">
-  <div class="audio-desc">Khuếch đại lớn + Bass sâu + Vocal nét (Tube Limiter chống rè 100%).</div>
-</div>
-
-<div class="item">
-  <span class="item-icon">⏭️</span>
-  <div class="item-body">
-    <div class="item-name">Tự skip ads YouTube</div>
-    <div class="item-desc">Không khựng 0:00 màn hình đen</div>
-  </div>
-  <label class="mtog yt"><input type="checkbox" id="ytSkipAds" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
+  <div class="audio-desc">Tăng âm lượng lớn + Bass sâu + Vocal trong (Chống rè 100%).</div>
 </div>
 
 <div class="item">
   <span class="item-icon">🎬</span>
   <div class="item-body">
     <div class="item-name">Tự động HD / 4K</div>
-    <div class="item-desc">Chọn chất lượng hình ảnh cao nhất</div>
+    <div class="item-desc">Khóa phân giải video cao nhất</div>
   </div>
   <label class="mtog yt"><input type="checkbox" id="ytAutoHD" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
 </div>
 
 <div class="item">
-  <span class="item-icon">📵</span>
-  <div class="item-body">
-    <div class="item-name">Ẩn YouTube Shorts</div>
-    <div class="item-desc">Xóa khỏi feed và trang chủ</div>
-  </div>
-  <label class="mtog yt"><input type="checkbox" id="ytRemoveShorts" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
-</div>
-
-<div class="divider"></div>
-
-<!-- GENERAL BẢO VỆ -->
-<div class="section-label">Bảo vệ & Tiện ích</div>
-
-<div class="item">
   <span class="item-icon">🌐</span>
   <div class="item-body">
-    <div class="item-name">Dịch chuột phải sang Tiếng Việt</div>
+    <div class="item-name">Dịch chuột phải Tiếng Việt</div>
     <div class="item-desc">Chuột phải vào chữ bôi đen để dịch</div>
   </div>
   <label class="mtog"><input type="checkbox" id="autoTranslate" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
-</div>
-
-<div class="item">
-  <span class="item-icon">🚫</span>
-  <div class="item-body">
-    <div class="item-name">Chặn quảng cáo web</div>
-    <div class="item-desc">Google Ads, banner, popup</div>
-  </div>
-  <label class="mtog"><input type="checkbox" id="blockAds" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
-</div>
-
-<div class="item">
-  <span class="item-icon">🎰</span>
-  <div class="item-body">
-    <div class="item-name">Chặn cờ bạc (VSbet...)</div>
-    <div class="item-desc">VSbet, ColaScore, FB88, W88...</div>
-  </div>
-  <label class="mtog"><input type="checkbox" id="blockBetting" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
-</div>
-
-<div class="item">
-  <span class="item-icon">🍪</span>
-  <div class="item-body">
-    <div class="item-name">Xóa thông báo Cookie</div>
-    <div class="item-desc">Tự ẩn GDPR cookie banner</div>
-  </div>
-  <label class="mtog"><input type="checkbox" id="removeCookieBanners" checked><div class="mt-track"></div><div class="mt-thumb"></div></label>
 </div>
 
 <div class="divider"></div>
 
 <!-- FOOTER -->
 <div class="footer">
-  <button class="foot-btn" id="clearCacheBtn">🗑 Xóa cache</button>
-  <button class="foot-btn" id="reloadBtn">🔃 Reload trang</button>
+  <button class="foot-btn" id="clearCacheBtn">Xóa cache</button>
+  <button class="foot-btn" id="reloadBtn">Reload trang</button>
 </div>
 
 <script src="popup.js"></script>
