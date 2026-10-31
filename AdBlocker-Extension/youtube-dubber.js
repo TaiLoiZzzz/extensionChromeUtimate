@@ -112,9 +112,8 @@
       if (liveCues && liveCues.length > 0 && (!D.cues || D.cues.length === 0)) {
         applyTimingToCues(liveCues);
         D.cues = liveCues;
-        showToast(`Đã nhận phụ đề trực tiếp (${D.cues.length} câu)`, 'success');
         const v = document.querySelector('video');
-        if (v) processQueue(v.currentTime);
+        preloadInitialBuffer(v);
       }
     }
   });
@@ -286,9 +285,8 @@
               parsedCues.forEach(c => { c.viText = c.text; });
             }
             D.cues = parsedCues;
-            showToast(`Đã sẵn sàng lồng tiếng (${D.cues.length} câu)`, 'success');
             const v = document.querySelector('video');
-            if (v) processQueue(v.currentTime);
+            preloadInitialBuffer(v);
             resolve(true);
             return;
           }
@@ -342,9 +340,8 @@
       if (parsedCues && parsedCues.length > 0) {
         applyTimingToCues(parsedCues);
         D.cues = parsedCues;
-        showToast(`Đã sẵn sàng lồng tiếng (${D.cues.length} câu)`, 'success');
         const v = document.querySelector('video');
-        if (v) processQueue(v.currentTime);
+        preloadInitialBuffer(v);
         return;
       }
     }
@@ -497,54 +494,144 @@
     return await res.arrayBuffer();
   }
 
-  // ─── QUẢN LÝ HÀNG ĐỢI DỊCH VÀ TỔNG HỢP TRƯỚC (PRE-FETCH BUFFER 15 GIÂY) ───
-  function processQueue(currentTime) {
-    if (!D.enabled || !D.cues || D.cues.length === 0) return;
+  // ─── ĐẢM BẢO CÂU ĐƯỢC DỊCH VÀ TẠO GIỌNG ĐỌC HOÀN CHỈNH TRƯỚC KHI PHÁT ───
+  function ensureCueReady(cue) {
+    if (!cue) return Promise.resolve(null);
+    if (cue.audioBuffer) return Promise.resolve(cue.audioBuffer);
 
-    // Lọc các câu sắp nói trong khoảng từ currentTime đến currentTime + 18s
-    const upcomingCues = D.cues.filter(c => c.start >= currentTime - 1 && c.start <= currentTime + 18);
+    return new Promise((resolve) => {
+      // 1. Dịch văn bản nếu chưa có viText
+      const getViText = () => {
+        if (cue.viText) return Promise.resolve(cue.viText);
+        if (cue.translating) {
+          return new Promise(r => {
+            const check = setInterval(() => {
+              if (!cue.translating) {
+                clearInterval(check);
+                r(cue.viText || '');
+              }
+            }, 50);
+            setTimeout(() => { clearInterval(check); r(cue.viText || ''); }, 3500);
+          });
+        }
 
-    for (const cue of upcomingCues) {
-      // 1. Dịch văn bản nếu chưa dịch
-      if (!cue.viText && !cue.translating) {
         cue.translating = true;
-        chrome.runtime.sendMessage({
-          type: 'DUB_TRANSLATE',
-          text: cue.text,
-          targetDuration: cue.effectiveTarget,
-          provider: D.provider,
-          apiKey: D.geminiApiKey
-        }, resp => {
-          cue.translating = false;
-          if (resp && resp.ok && resp.result) {
-            cue.viText = condenseVietnameseText(resp.result, cue.maxSyllables);
-          } else {
-            cue.viText = cue.text; // Giữ nguyên nếu lỗi
-          }
+        return new Promise(r => {
+          chrome.runtime.sendMessage({
+            type: 'DUB_TRANSLATE',
+            text: cue.text,
+            targetDuration: cue.effectiveTarget,
+            provider: D.provider,
+            apiKey: D.geminiApiKey
+          }, resp => {
+            cue.translating = false;
+            if (resp && resp.ok && resp.result) {
+              cue.viText = condenseVietnameseText(resp.result, cue.maxSyllables);
+            }
+            r(cue.viText || '');
+          });
         });
-      }
+      };
 
-      // 2. Tổng hợp giọng đọc Edge-TTS nếu đã dịch xong và chưa có AudioBuffer
-      if (cue.viText && !cue.audioBuffer && !cue.synthesizing) {
+      // 2. Tạo giọng đọc Edge-TTS sau khi đã có bản dịch
+      getViText().then(viText => {
+        if (!viText) {
+          resolve(null);
+          return;
+        }
+        if (cue.audioBuffer) {
+          resolve(cue.audioBuffer);
+          return;
+        }
+        if (cue.synthesizing) {
+          const check = setInterval(() => {
+            if (!cue.synthesizing) {
+              clearInterval(check);
+              resolve(cue.audioBuffer || null);
+            }
+          }, 50);
+          setTimeout(() => { clearInterval(check); resolve(cue.audioBuffer || null); }, 3500);
+          return;
+        }
+
         cue.synthesizing = true;
-        fetchEdgeTTSAudio(cue.viText, D.voice)
+        fetchEdgeTTSAudio(viText, D.voice)
           .then(decodeAudioData)
           .then(buffer => {
             cue.synthesizing = false;
             cue.audioBuffer = buffer;
+            resolve(buffer);
           })
           .catch(() => {
-            // Dự phòng 1: Google TTS Audio
-            fetchGoogleTTSAudio(cue.viText)
+            // Dự phòng Google TTS Audio
+            fetchGoogleTTSAudio(viText)
               .then(decodeAudioData)
               .then(buffer => {
                 cue.synthesizing = false;
                 cue.audioBuffer = buffer;
+                resolve(buffer);
               })
               .catch(() => {
                 cue.synthesizing = false;
+                resolve(null);
               });
           });
+      });
+    });
+  }
+
+  // ─── NẠP TRƯỚC BẢN DỊCH VÀ GIỌNG ĐỌC KHI MỚI VÀO (TRÁNH BỊ HỤT CÂU & NGẮT QUÃNG) ───
+  let isBufferingInitial = false;
+
+  async function preloadInitialBuffer(video) {
+    if (!D.cues || D.cues.length === 0 || isBufferingInitial) return;
+    isBufferingInitial = true;
+
+    const curTime = video ? video.currentTime : 0;
+    // Lấy 4 câu đầu tiên sắp nói tính từ thời điểm hiện tại
+    const initialBatch = D.cues.filter(c => c.end >= curTime && c.start <= curTime + 22).slice(0, 4);
+
+    if (initialBatch.length > 0) {
+      const wasPlaying = video && !video.paused;
+
+      // Nếu video đang chạy, tạm dừng nhẹ 1.2s để nạp trước bản dịch trọn vẹn
+      if (wasPlaying) {
+        try { video.pause(); } catch (e) {}
+      }
+
+      showToast('Đang nạp trước bản dịch & giọng đọc AI (chờ 1 giây)...', 'loading');
+
+      // Chạy dịch và tổng hợp song song toàn bộ batch đầu tiên
+      const tasks = initialBatch.map(c => ensureCueReady(c));
+
+      await Promise.race([
+        Promise.all(tasks),
+        new Promise(r => setTimeout(r, 1400))
+      ]);
+
+      if (wasPlaying && video) {
+        try { video.play(); } catch (e) {}
+      }
+
+      showToast(`Đã sẵn sàng thuyết minh (${initialBatch.length} câu đã nạp)`, 'normal');
+    }
+
+    isBufferingInitial = false;
+
+    // Tiếp tục kích hoạt nạp trước nền cho 28 giây tiếp theo
+    if (video) processQueue(video.currentTime);
+  }
+
+  // ─── QUẢN LÝ HÀNG ĐỢI NẠP TRƯỚC LIÊN TỤC 28 GIÂY ───
+  function processQueue(currentTime) {
+    if (!D.enabled || !D.cues || D.cues.length === 0) return;
+
+    // Lọc các câu sắp nói trong khoảng từ currentTime đến currentTime + 28s
+    const upcomingCues = D.cues.filter(c => c.start >= currentTime - 1 && c.start <= currentTime + 28);
+
+    for (const cue of upcomingCues) {
+      if (!cue.audioBuffer && !cue.synthesizing && !cue.translating) {
+        ensureCueReady(cue);
       }
     }
   }
@@ -589,10 +676,10 @@
       source.start(0);
 
     } else {
-      // Dự phòng 2: Web Speech API (Native Browser SpeechSynthesis)
-      if ('speechSynthesis' in window) {
+      // Dự phòng 2: Web Speech API (Chỉ đọc nếu đã có bản dịch tiếng Việt)
+      if ('speechSynthesis' in window && cue.viText) {
         window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(cue.viText || cue.text);
+        const utter = new SpeechSynthesisUtterance(cue.viText);
         utter.lang = 'vi-VN';
         utter.rate = 1.15;
         // SpeechSynthesisUtterance.volume chuẩn W3C từ 0.0 đến 1.0
@@ -606,6 +693,9 @@
           updateOriginalAudioDucking();
         };
         window.speechSynthesis.speak(utter);
+      } else {
+        D.isSpeaking = false;
+        updateOriginalAudioDucking();
       }
     }
   }
@@ -641,22 +731,39 @@
       if (!D.enabled || !D.cues || D.cues.length === 0) return;
       const t = video.currentTime;
 
-      // Xử lý nạp dữ liệu phía trước
+      // Nạp trước dữ liệu 28 giây tiếp theo
       processQueue(t);
 
+      // Nếu đang nói câu hiện tại, KHÔNG ĐƯỢC ngắt giữa chừng!
+      if (D.isSpeaking) return;
+
       // Tìm câu tương ứng với thời điểm hiện tại
-      const cueIndex = D.cues.findIndex(c => t >= c.start && t < (c.end + (c.gap || 0.2)));
+      const cueIndex = D.cues.findIndex(c => t >= c.start && t < (c.end + (c.gap || 0.4)));
 
       if (cueIndex !== -1 && cueIndex !== D.activeCueIndex) {
-        D.activeCueIndex = cueIndex;
-        playCueAudio(D.cues[cueIndex]);
+        const cue = D.cues[cueIndex];
+        
+        if (cue.audioBuffer || cue.viText) {
+          D.activeCueIndex = cueIndex;
+          playCueAudio(cue);
+        } else {
+          // Nếu câu này đang được nạp dở: ưu tiên hoàn tất và phát ngay khi xong
+          ensureCueReady(cue).then(() => {
+            if (D.enabled && !D.isSpeaking && Math.abs(video.currentTime - cue.start) < (cue.duration + 1.2)) {
+              D.activeCueIndex = cueIndex;
+              playCueAudio(cue);
+            }
+          });
+        }
       }
     });
 
     video.addEventListener('seeking', () => {
       stopCurrentAudio();
       D.activeCueIndex = -1;
-      if (D.enabled) processQueue(video.currentTime);
+      if (D.enabled) {
+        preloadInitialBuffer(video);
+      }
     });
 
     video.addEventListener('pause', () => {
@@ -1070,6 +1177,9 @@
     bindVideoEvents();
     if (!D.cues || D.cues.length === 0) {
       loadSubtitlesForCurrentVideo();
+    } else {
+      const v = document.querySelector('video');
+      preloadInitialBuffer(v);
     }
   }
 
