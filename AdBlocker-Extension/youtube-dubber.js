@@ -732,6 +732,17 @@
     }
   }
 
+  // ─── NẠP GỐI ĐẦU LIÊN TỤC TRONG LÚC ĐANG NÓI (ROLLING PRE-BUFFER PIPELINE) ───
+  function preloadUpcomingWindow(startIndex, count = 5) {
+    if (!D.enabled || !D.cues || D.cues.length === 0) return;
+    const targets = D.cues.slice(startIndex, startIndex + count);
+    for (const cue of targets) {
+      if (!cue.audioBuffer && !cue.synthesizing && !cue.translating) {
+        ensureCueReady(cue);
+      }
+    }
+  }
+
   // ─── QUẢN LÝ HÀNG ĐỢI NẠP TRƯỚC LIÊN TỤC 25 GIÂY ───
   function processQueue(currentTime) {
     if (!D.enabled || !D.cues || D.cues.length === 0 || D.isPreparing) return;
@@ -746,7 +757,7 @@
     }
   }
 
-  // ─── PHÁT ÂM THANH ĐỒNG BỘ THỜI GIAN THỰC + DUCKING NHẠC NỀN ───
+  // ─── PHÁT ÂM THANH ĐỒNG BỘ THỜI GIAN THỰC + CÂU SAU NHẢY VÀO LIỀN ───
   function playCueAudio(cue) {
     if (!cue || !cue.audioBuffer) {
       D.isSpeaking = false;
@@ -760,6 +771,9 @@
     updateOriginalAudioDucking();
     showToast(cue.viText || cue.text, 'speaking');
 
+    // TRONG LÚC CÂU NÀY ĐANG ĐỌC, CHẠY DỊCH TIẾP NGAY 5 CÂU SAU ĐỂ CÓ SẴN GỐI ĐẦU
+    preloadUpcomingWindow(cue.id + 1, 5);
+
     if (D.audioCtx && D.dubGainNode) {
       try {
         const source = D.audioCtx.createBufferSource();
@@ -772,6 +786,37 @@
         source.onended = () => {
           D.isSpeaking = false;
           D.currentSource = null;
+
+          const video = document.querySelector('video');
+          if (!D.enabled || !video || video.paused || video.ended) {
+            updateOriginalAudioDucking();
+            return;
+          }
+
+          // CÂU TRƯỚC VỪA DỨT LÀ CÂU SAU NHẢY VÀO LIỀN, KHÔNG PHẢI ĐỢI
+          const nextIndex = cue.id + 1;
+          if (nextIndex < D.cues.length) {
+            const nextCue = D.cues[nextIndex];
+            const t = video.currentTime;
+            const timeDiff = nextCue.start - t;
+
+            // Nếu câu sau thuộc mạch nói của video (cách nhau <= 1.5s hoặc video đã chạy tới)
+            if (timeDiff <= 1.5 && Math.abs(t - nextCue.start) < (nextCue.duration + 3.0)) {
+              D.activeCueIndex = nextIndex;
+              if (nextCue.audioBuffer) {
+                // Nhảy vào đọc liền ngay lập tức
+                playCueAudio(nextCue);
+              } else {
+                ensureCueReady(nextCue).then(buf => {
+                  if (buf && D.enabled && !D.isSpeaking) {
+                    playCueAudio(nextCue);
+                  }
+                });
+              }
+              return;
+            }
+          }
+
           updateOriginalAudioDucking();
         };
 
