@@ -199,6 +199,50 @@ async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
   return await fetchGoogleTranslate(text, 'vi');
 }
 
+// ─── TẢI PHỤ ĐỀ YOUTUBE BẰNG INNERTUBE API (CHUẨN XÁC 100%, KHÔNG CẦN COOKIE) ───
+async function fetchInnerTubeSubtitles(videoId) {
+  const url = 'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      'X-YouTube-Client-Name': '5',
+      'X-YouTube-Client-Version': '20.10.4',
+      'Origin': 'https://www.youtube.com'
+    },
+    body: JSON.stringify({
+      context: {
+        client: {
+          clientName: 'IOS',
+          clientVersion: '20.10.4',
+          hl: 'en',
+          gl: 'US',
+          deviceMake: 'Apple',
+          deviceModel: 'iPhone16,2',
+          platform: 'MOBILE',
+          osName: 'iOS',
+          osVersion: '18.3.2.22D82'
+        }
+      },
+      videoId: videoId
+    })
+  });
+  const data = await res.json();
+  const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+  if (!tracks.length) throw new Error('Không tìm thấy track phụ đề trong InnerTube');
+
+  // Ưu tiên: Tiếng Việt -> Tiếng Anh manual -> Tiếng Anh auto -> Track đầu tiên
+  const best = tracks.find(t => t.languageCode === 'vi')
+    || tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
+    || tracks.find(t => t.languageCode === 'en')
+    || tracks[0];
+
+  const subRes = await fetch(best.baseUrl);
+  const xml = await subRes.text();
+  return { xml, track: best };
+}
+
 // ─── TẢI PHỤ ĐỀ YOUTUBE TIMEDTEXT XUYÊN DOMAIN ───
 async function fetchSubtitles(url) {
   try {
@@ -247,6 +291,13 @@ function incrementBlocked(count = 1, kb = 0) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'DUB_FETCH_INNERTUBE_SUBTITLES') {
+    fetchInnerTubeSubtitles(msg.videoId)
+      .then(res => sendResponse({ ok: true, xml: res.xml, track: res.track }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
   if (msg.type === 'DUB_GET_SUBTITLES') {
     fetchSubtitles(msg.url)
       .then(data => sendResponse({ ok: true, data }))
