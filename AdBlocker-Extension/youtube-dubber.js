@@ -702,72 +702,38 @@
     });
   }
 
-  // ─── CHUẨN BỊ, QUÉT VÀ TÍNH TOÁN ĐỒNG BỘ KĨ LƯỠNG TRƯỚC KHI VIDEO CHẠY ───
+  // ─── QUẢN LÝ ĐƠN LUỒNG PHÁT ĐỘC QUYỀN VÀ PIPELINE GỐI ĐẦU TUẦN TỰ ───
+  const P = {
+    currentIndex: -1,   // Chỉ số câu đang phát
+    targetIndex: 0,     // Chỉ số câu tiếp theo cần phát
+    isPlaying: false,   // Đang phát âm thanh
+    token: 0,           // Token đơn điệu chống đè âm thanh tuyệt đối
+    sourceNode: null,   // Web Audio BufferSourceNode
+    audioEl: null       // HTML5 Audio Element fallback
+  };
+
   let isBufferingInitial = false;
 
-  async function prepareAndStartDubbing(video) {
-    if (!D.enabled) return;
-    if (isBufferingInitial) return;
-    isBufferingInitial = true;
-    D.isPreparing = true;
-
-    const wasPlaying = video && !video.paused;
-    if (wasPlaying) {
-      try { video.pause(); } catch(e) {}
+  function stopCurrentAudio() {
+    P.token++; // Vô hiệu hóa toàn bộ callback async trước đó
+    if (P.sourceNode) {
+      try { P.sourceNode.stop(); } catch (e) {}
+      P.sourceNode = null;
     }
-
-    showToast('🔍 Đang chuẩn bị phụ đề và giọng đọc...', 'loading');
-
-    // 1. Quét toàn bộ phụ đề nếu chưa nạp
-    if (!D.cues || D.cues.length === 0) {
-      const ok = await loadSubtitlesForCurrentVideo();
-      if (!ok || !D.cues || D.cues.length === 0) {
-        showToast('⚠️ Video này không có phụ đề để thuyết minh', 'error');
-        D.isPreparing = false;
-        isBufferingInitial = false;
-        if (wasPlaying && video) {
-          try { video.play(); } catch(e) {}
-        }
-        return;
-      }
+    if (P.audioEl) {
+      try {
+        P.audioEl.pause();
+        P.audioEl.currentTime = 0;
+        P.audioEl.src = '';
+      } catch (e) {}
+      P.audioEl = null;
     }
-
-    const curTime = video ? video.currentTime : 0;
-    // Lấy 4 câu kế tiếp bắt đầu từ vị trí hiện tại
-    let initialBatch = D.cues.filter(c => c.end >= curTime).slice(0, 4);
-    if (initialBatch.length === 0 && D.cues.length > 0) {
-      initialBatch = D.cues.slice(0, 4);
-    }
-
-    if (initialBatch.length > 0) {
-      showToast(`⚡ Đang nạp sẵn (${initialBatch.length} câu đầu)...`, 'loading');
-      await Promise.all(initialBatch.map(c => ensureCueReady(c)));
-    }
-
-    D.isPreparing = false;
-    isBufferingInitial = false;
-
-    showToast(`✅ Thuyết minh đã sẵn sàng!`, 'loading');
-    setTimeout(() => {
-      hideToast();
-    }, 1200);
-
-    // Kích hoạt phát video và bắt đầu thuyết minh
-    if (video) {
-      initAudioCtx();
-      if (wasPlaying || video.paused) {
-        try {
-          await video.play();
-        } catch (err) {
-          console.warn('[Dubber] Video autoplay blocked, click to play:', err);
-        }
-      }
-      startClockLoop(video);
-      processQueue(video.currentTime);
-    }
+    P.isPlaying = false;
+    D.isSpeaking = false;
+    updateOriginalAudioDucking();
   }
 
-  // ─── NẠP GỐI ĐẦU LIÊN TỤC TRONG LÚC ĐANG NÓI (ROLLING PRE-BUFFER PIPELINE) ───
+  // ─── NẠP GỐI ĐẦU TRƯỚC CÁC CÂU KẾ TIẾP VÀO RAM TRONG NỀN ───
   function preloadUpcomingWindow(startIndex, count = 5) {
     if (!D.enabled || !D.cues || D.cues.length === 0) return;
     const targets = D.cues.slice(startIndex, startIndex + count);
@@ -778,13 +744,10 @@
     }
   }
 
-  // ─── QUẢN LÝ HÀNG ĐỢI NẠP TRƯỚC LIÊN TỤC 25 GIÂY ───
+  // ─── DUY TRÌ HÀNG ĐỢI NẠP TRƯỚC 25 GIÂY ───
   function processQueue(currentTime) {
     if (!D.enabled || !D.cues || D.cues.length === 0 || D.isPreparing) return;
-
-    // Lọc các câu sắp nói trong khoảng từ currentTime đến currentTime + 25s
     const upcomingCues = D.cues.filter(c => c.start >= currentTime - 1 && c.start <= currentTime + 25);
-
     for (const cue of upcomingCues) {
       if (!cue.audioBuffer && !cue.audioBlobUrl && !cue.synthesizing && !cue.translating) {
         ensureCueReady(cue);
@@ -792,63 +755,66 @@
     }
   }
 
-  // ─── PHÁT ÂM THANH ĐỒNG BỘ THỜI GIAN THỰC + ĐỘC QUYỀN DUAL-ENGINE (CHẮC CHẮN 100% CÓ TIẾNG) ───
-  function playCueAudio(cue) {
-    if (!cue || (!cue.audioBuffer && !cue.audioBlobUrl)) {
-      D.isSpeaking = false;
-      return;
-    }
+  // ─── PHÁT CÂU THEO CHỈ SỐ TUẦN TỰ (CHỐNG TRÙNG LẶP 100%, GỐI ĐẦU LIỀN MẠCH) ───
+  function playCueByIndex(index) {
+    if (!D.enabled || !D.cues || index < 0 || index >= D.cues.length) return;
+    const cue = D.cues[index];
+    if (!cue || (!cue.audioBuffer && !cue.audioBlobUrl)) return;
 
-    initAudioCtx();
+    // DẬP TẮT NGAY MỌI ÂM THANH ĐANG NÓI CŨ ĐỂ KHÔNG BAO GIỜ BỊ ĐÈ TIẾNG
     stopCurrentAudio();
+    const myToken = ++P.token;
 
+    P.currentIndex = index;
+    P.targetIndex = index + 1;
+    P.isPlaying = true;
     D.isSpeaking = true;
     updateOriginalAudioDucking();
     showToast(cue.viText || cue.text, 'speaking');
 
-    // TRONG LÚC CÂU NÀY ĐANG ĐỌC, CHẠY DỊCH TIẾP NGAY 5 CÂU SAU ĐỂ CÓ SẴN GỐI ĐẦU
-    preloadUpcomingWindow(cue.id + 1, 5);
+    // NẠP GỐI ĐẦU TIẾP 5 CÂU KẾ TIẾP VÀO RAM TRONG NỀN TRONG LÚC CÂU NÀY ĐANG ĐỌC
+    preloadUpcomingWindow(index + 1, 5);
 
     const onAudioEnd = () => {
+      // Nếu token không khớp -> âm thanh này đã bị dập tắt hoặc hết hạn, bỏ qua
+      if (myToken !== P.token) return;
+
+      P.isPlaying = false;
       D.isSpeaking = false;
-      D.currentSource = null;
-      D.currentAudioEl = null;
+      P.sourceNode = null;
+      P.audioEl = null;
+      updateOriginalAudioDucking();
 
       const video = document.querySelector('video');
-      if (!D.enabled || !video || video.paused || video.ended) {
-        updateOriginalAudioDucking();
-        return;
-      }
+      if (!D.enabled || !video || video.paused || video.ended) return;
 
-      // CÂU TRƯỚC VỪA DỨT LÀ CÂU SAU NHẢY VÀO LIỀN, KHÔNG PHẢI ĐỢI
-      const nextIndex = cue.id + 1;
-      if (nextIndex < D.cues.length) {
-        const nextCue = D.cues[nextIndex];
-        const t = video.currentTime;
-        const timeDiff = nextCue.start - t;
+      // CÂU TRƯỚC VỪA NÓI XONG LÀ CÂU SAU NHẢY VÀO LIỀN KHÔNG PHẢI ĐỢI
+      const nextIdx = index + 1;
+      P.targetIndex = nextIdx;
 
-        // Nếu câu sau thuộc mạch nói của video (cách nhau <= 1.5s hoặc video đã chạy tới)
-        if (timeDiff <= 1.5 && Math.abs(t - nextCue.start) < (nextCue.duration + 3.0)) {
-          D.activeCueIndex = nextIndex;
+      if (nextIdx < D.cues.length) {
+        const nextCue = D.cues[nextIdx];
+        const curT = video.currentTime;
+
+        // Nếu video đã tới hoặc sắp tới câu tiếp theo (khoảng cách <= 1.2s hoặc đang trong tầm câu tiếp):
+        if (curT + 1.2 >= nextCue.start && curT <= nextCue.end + 3.0) {
           if (nextCue.audioBuffer || nextCue.audioBlobUrl) {
-            playCueAudio(nextCue);
+            playCueByIndex(nextIdx);
           } else {
+            // Nếu đang trong tích tắc hoàn tất nạp (đã gối đầu trước): phát ngay khi sẵn sàng
             ensureCueReady(nextCue).then(() => {
-              if (D.enabled && !D.isSpeaking) {
-                playCueAudio(nextCue);
+              if (myToken === P.token && !P.isPlaying && !video.paused && P.targetIndex === nextIdx) {
+                playCueByIndex(nextIdx);
               }
             });
           }
-          return;
         }
       }
-
-      updateOriginalAudioDucking();
     };
 
     let playedViaWebAudio = false;
 
-    // 1. ƯU TIÊN PHÁT QUA WEB AUDIO API NẾU RUNNING
+    // 1. Web Audio API
     if (D.audioCtx && D.audioCtx.state === 'running' && D.dubGainNode && cue.audioBuffer) {
       try {
         const source = D.audioCtx.createBufferSource();
@@ -857,9 +823,8 @@
         source.playbackRate.setValueAtTime(rate, D.audioCtx.currentTime);
         source.connect(D.dubGainNode);
         source.onended = onAudioEnd;
-        D.currentSource = source;
-        const dur = cue.audioBuffer.duration || 1.0;
-        const startOffset = Math.max(0, Math.min(cue.silenceOffset || 0, Math.max(0, dur - 0.1)));
+        P.sourceNode = source;
+        const startOffset = Math.max(0, cue.silenceOffset || 0);
         source.start(0, startOffset);
         playedViaWebAudio = true;
       } catch (err) {
@@ -867,7 +832,7 @@
       }
     }
 
-    // 2. NẾU WEB AUDIO BỊ SUSPENDED HOẶC LỖI -> LẬP TỨC PHÁT QUA HTML5 AUDIO ELEMENT (100% CÓ TIẾNG RA LOA)
+    // 2. HTML5 Audio Element Fallback
     if (!playedViaWebAudio && cue.audioBlobUrl) {
       try {
         if (D.audioCtx && D.audioCtx.state === 'suspended') {
@@ -877,31 +842,87 @@
         audio.volume = Math.max(0, Math.min(1.0, D.dubVolume));
         audio.playbackRate = cue.calculatedRate || 1.0;
         audio.onended = onAudioEnd;
-        D.currentAudioEl = audio;
-        audio.play().catch(e => {
-          console.warn('[Dubber] HTML5 Audio play error:', e);
-          onAudioEnd();
-        });
+        audio.onerror = onAudioEnd;
+        P.audioEl = audio;
+        audio.play().catch(onAudioEnd);
       } catch (e2) {
         onAudioEnd();
       }
     }
   }
 
-  function stopCurrentAudio() {
-    if (D.currentSource) {
-      try { D.currentSource.stop(); } catch (e) {}
-      D.currentSource = null;
+  // ─── CHUẨN BỊ, QUÉT VÀ NẠP SẴN 4 CÂU ĐẦU TRƯỚC KHI BẮT ĐẦU ───
+  async function prepareAndStartDubbing(video, startIdx = null) {
+    if (!D.enabled) return;
+    if (isBufferingInitial) return;
+    isBufferingInitial = true;
+    D.isPreparing = true;
+
+    const wasPlaying = video && !video.paused;
+    if (wasPlaying) {
+      try { video.pause(); } catch (e) {}
     }
-    if (D.currentAudioEl) {
-      try {
-        D.currentAudioEl.pause();
-        D.currentAudioEl.currentTime = 0;
-      } catch (e) {}
-      D.currentAudioEl = null;
+
+    showToast('🔍 Đang kiểm tra phụ đề...', 'loading');
+
+    // 1. Quét toàn bộ phụ đề nếu chưa có
+    if (!D.cues || D.cues.length === 0) {
+      const ok = await loadSubtitlesForCurrentVideo();
+      if (!ok || !D.cues || D.cues.length === 0) {
+        showToast('⚠️ Video này không có phụ đề để thuyết minh', 'error');
+        D.isPreparing = false;
+        isBufferingInitial = false;
+        if (wasPlaying && video) {
+          try { video.play(); } catch (e) {}
+        }
+        return;
+      }
     }
-    D.isSpeaking = false;
-    updateOriginalAudioDucking();
+
+    const curTime = video ? video.currentTime : 0;
+    let targetIdx = startIdx;
+    if (targetIdx === null || targetIdx === undefined || targetIdx < 0) {
+      targetIdx = D.cues.findIndex(c => curTime <= c.end);
+      if (targetIdx === -1) targetIdx = 0;
+    }
+    P.targetIndex = targetIdx;
+    P.currentIndex = -1;
+
+    // 2. Dịch và nạp sẵn 4 câu đầu tiên
+    const initialBatch = D.cues.slice(targetIdx, targetIdx + 4);
+    if (initialBatch.length > 0) {
+      showToast(`⚡ Đang nạp sẵn (${initialBatch.length} câu đầu)...`, 'loading');
+      await Promise.all(initialBatch.map(c => ensureCueReady(c)));
+    }
+
+    D.isPreparing = false;
+    isBufferingInitial = false;
+
+    showToast('✅ Thuyết minh đã sẵn sàng!', 'loading');
+    setTimeout(() => {
+      hideToast();
+    }, 1000);
+
+    // 3. Khởi động phát video và chạy vòng lặp đồng bộ
+    if (video) {
+      initAudioCtx();
+      if (wasPlaying || video.paused) {
+        try {
+          await video.play();
+        } catch (err) {
+          console.warn('[Dubber] Video play blocked, click video to start:', err);
+        }
+      }
+      startClockLoop(video);
+
+      // Nếu video hiện tại đã nằm ngay trong tầm câu bắt đầu: phát luôn câu đầu tiên!
+      const firstCue = D.cues[targetIdx];
+      if (firstCue && (firstCue.audioBuffer || firstCue.audioBlobUrl)) {
+        if (curTime + 0.5 >= firstCue.start && curTime <= firstCue.end + 2.0) {
+          playCueByIndex(targetIdx);
+        }
+      }
+    }
   }
 
   function stopAllDubbing() {
@@ -912,58 +933,49 @@
     updateOriginalAudioDucking();
   }
 
-  // ─── VÒNG LẶP ĐỒNG BỘ THEO PLAYER CLOCK (RAF + TIMEUPDATE SIÊU CHÍNH XÁC) ───
+  // ─── VÒNG LẶP ĐỒNG BỘ THEO PLAYER CLOCK (CHỈ PHÁT KHI KHÔNG CÓ CÂU NÀO ĐANG NÓI) ───
   let boundVideoElement = null;
   let syncRafId = null;
 
   function checkAndPlayCurrentCue(video) {
     if (!D.enabled || !D.cues || D.cues.length === 0 || !video || D.isPreparing) return;
+
     const t = video.currentTime;
 
-    // Nạp trước dữ liệu nền 25 giây tiếp theo
+    // Luôn giữ các câu 25 giây tới được nạp trong nền
     processQueue(t);
 
-    // Bù trừ độ trễ ASR YouTube + Offset điều chỉnh của người dùng
-    const syncLeadTime = 0.35 + (D.syncOffset || 0);
-    const syncT = t + syncLeadTime;
+    // NẾU ĐANG CÓ TIẾNG NÓI -> TUYỆT ĐỐI KHÔNG CAN THIỆP (onAudioEnd sẽ tự nối câu tiếp theo)
+    if (P.isPlaying || D.isSpeaking) return;
 
-    // Tìm câu tương ứng với thời điểm hiện tại
-    const cueIndex = D.cues.findIndex(c => syncT >= c.start && t < (c.end + (c.gap || 0.35)));
+    let idx = P.targetIndex;
+    if (idx < 0 || idx >= D.cues.length) return;
 
-    if (cueIndex !== -1 && cueIndex !== D.activeCueIndex) {
-      const cue = D.cues[cueIndex];
-      D.activeCueIndex = cueIndex; // ĐÁNH DẤU NGAY LẬP TỨC để tránh gọi lặp lại trong vòng lặp RAF
+    let cue = D.cues[idx];
+    if (!cue) return;
 
-      const triggerPlayback = (targetCue) => {
-        if (targetCue.audioBuffer) {
-          playCueAudio(targetCue);
-        } else {
-          ensureCueReady(targetCue).then(buf => {
-            if (buf && D.enabled && !D.isPreparing && Math.abs(video.currentTime - targetCue.start) < (targetCue.duration + 2.0)) {
-              playCueAudio(targetCue);
-            }
-          });
-        }
-      };
+    // Nếu video nhảy xa (do tua video): tìm lại chỉ số câu phù hợp
+    if (t > cue.end + 3.0 || t < cue.start - 6.0) {
+      const newIdx = D.cues.findIndex(c => t <= c.end);
+      if (newIdx !== -1) {
+        P.targetIndex = newIdx;
+        idx = newIdx;
+        cue = D.cues[idx];
+      }
+    }
 
-      // Chuyển tiếp mượt mà: nếu đang có câu trước, fade out nhẹ 40ms rồi phát câu mới đúng giờ
-      if (D.isSpeaking && D.dubGainNode && D.audioCtx) {
-        try {
-          D.dubGainNode.gain.cancelScheduledValues(D.audioCtx.currentTime);
-          D.dubGainNode.gain.setTargetAtTime(0.001, D.audioCtx.currentTime, 0.015);
-        } catch(e) {}
-        setTimeout(() => {
-          stopCurrentAudio();
-          if (D.dubGainNode && D.audioCtx) {
-            try {
-              D.dubGainNode.gain.cancelScheduledValues(D.audioCtx.currentTime);
-              D.dubGainNode.gain.setTargetAtTime(D.dubVolume, D.audioCtx.currentTime, 0.02);
-            } catch(e2) {}
-          }
-          triggerPlayback(cue);
-        }, 40);
+    const leadTime = 0.35 + (D.syncOffset || 0);
+
+    // Khi video chạm đến thời điểm bắt đầu câu
+    if (t + leadTime >= cue.start && t <= cue.end + 2.5) {
+      if (cue.audioBuffer || cue.audioBlobUrl) {
+        playCueByIndex(idx);
       } else {
-        triggerPlayback(cue);
+        ensureCueReady(cue).then(() => {
+          if (!P.isPlaying && !video.paused && P.targetIndex === idx) {
+            playCueByIndex(idx);
+          }
+        });
       }
     }
   }
@@ -993,30 +1005,38 @@
     if (!video || boundVideoElement === video) return;
     boundVideoElement = video;
 
-    video.addEventListener('timeupdate', () => {
-      checkAndPlayCurrentCue(video);
-    });
-
     video.addEventListener('seeking', () => {
       stopCurrentAudio();
-      D.activeCueIndex = -1;
-      if (D.enabled && !D.isPreparing) {
-        prepareAndStartDubbing(video);
-      }
+      const t = video.currentTime;
+      let idx = D.cues.findIndex(c => t <= c.end);
+      if (idx === -1) idx = 0;
+      P.targetIndex = idx;
+      P.currentIndex = -1;
+      preloadUpcomingWindow(idx, 4);
     });
 
     video.addEventListener('pause', () => {
       if (!D.isPreparing) {
         stopClockLoop();
+        if (P.audioEl) {
+          try { P.audioEl.pause(); } catch (e) {}
+        }
         if (D.audioCtx && D.audioCtx.state === 'running') {
           D.audioCtx.suspend().catch(() => {});
         }
+        updateOriginalAudioDucking();
       }
     });
 
     video.addEventListener('play', () => {
       initAudioCtx();
-      if (!D.isPreparing) {
+      if (D.audioCtx && D.audioCtx.state === 'suspended') {
+        D.audioCtx.resume().catch(() => {});
+      }
+      if (!D.isPreparing && D.enabled) {
+        if (P.audioEl && P.isPlaying) {
+          try { P.audioEl.play().catch(() => {}); } catch (e) {}
+        }
         startClockLoop(video);
       }
     });
@@ -1033,7 +1053,8 @@
       if (vId && vId !== D.currentVideoId) {
         D.currentVideoId = vId;
         D.cues = [];
-        D.activeCueIndex = -1;
+        P.currentIndex = -1;
+        P.targetIndex = 0;
         stopCurrentAudio();
         if (D.enabled) {
           const v = document.querySelector('video');
@@ -1056,8 +1077,8 @@
 
     window.__ub_dom_obs = new MutationObserver(() => {
       if (!D.enabled) return;
-      // Chỉ can thiệp nếu chưa có cues tải qua timedtext
-      if (D.cues && D.cues.length > 5) return;
+      // Chỉ can thiệp nếu HOÀN TOÀN KHÔNG CÓ cues từ timedtext
+      if (D.cues && D.cues.length > 0) return;
 
       const segs = document.querySelectorAll('.ytp-caption-segment');
       if (segs.length > 0) {

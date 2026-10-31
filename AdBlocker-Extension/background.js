@@ -510,7 +510,7 @@ async function fetchBackgroundEdgeTTS(text, voice) {
           try { ws.close(); } catch(e) {}
           reject(new Error('Edge-TTS timeout'));
         }
-      }, 5000);
+      }, 2500);
 
       ws.onopen = () => {
         const configMsg = `Content-Type:application/json;charset=utf-8\r\nPath:speech.config\r\n\r\n` +
@@ -603,19 +603,45 @@ async function fetchBackgroundEdgeTTS(text, voice) {
 
 // ─── TỔNG HỢP ÂM THANH DỰ PHÒNG GOOGLE TTS QUA BACKGROUND SERVICE WORKER (KHÔNG BỊ CSP) ───
 async function fetchBackgroundGoogleTTS(text) {
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(text)}`;
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+  const chunks = [];
+  const words = (text || '').trim().split(/\s+/);
+  let cur = '';
+  const parts = [];
+  for (const w of words) {
+    if ((cur + ' ' + w).length > 150) {
+      if (cur) parts.push(cur);
+      cur = w;
+    } else {
+      cur = cur ? (cur + ' ' + w) : w;
     }
-  });
-  if (!res.ok) throw new Error('Google TTS HTTP failed: ' + res.status);
-  const arrayBuf = await res.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuf);
+  }
+  if (cur) parts.push(cur);
+  if (parts.length === 0) parts.push('ok');
+
+  for (const part of parts) {
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(part)}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+      }
+    });
+    if (!res.ok) throw new Error('Google TTS HTTP failed: ' + res.status);
+    const arrayBuf = await res.arrayBuffer();
+    chunks.push(new Uint8Array(arrayBuf));
+  }
+
+  const totalLen = chunks.reduce((acc, c) => acc + c.byteLength, 0);
+  const merged = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
+
   let binary = '';
   const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  for (let i = 0; i < merged.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, merged.subarray(i, i + chunkSize));
   }
   return btoa(binary);
 }
