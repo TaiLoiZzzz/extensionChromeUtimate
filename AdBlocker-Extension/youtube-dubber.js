@@ -25,6 +25,30 @@
     isSpeaking: false
   };
 
+  // ─── ĐIỀU PHỐI ÂM LƯỢNG VIDEO GỐC CHÍNH XÁC (DUCKING & MUTE) ───
+  function updateOriginalAudioDucking() {
+    if (!D.enabled) {
+      window.postMessage({ type: 'UB_AUDIO_DUCK', duck: false, level: 1.0 }, '*');
+      return;
+    }
+
+    if (D.duckLevel <= 0.005) {
+      // Người dùng kéo về 0%: Tắt tiếng gốc hoàn toàn trong suốt quá trình thuyết minh
+      window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: 0.0 }, '*');
+      return;
+    }
+
+    if (D.isSpeaking) {
+      // Khi AI đang nói: hạ đúng mức D.duckLevel người dùng chọn
+      window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: D.duckLevel }, '*');
+    } else {
+      // Khi AI tạm nghỉ giữa các câu:
+      // Giữ âm lượng nền êm dịu (khoảng 30% - 50%), KHÔNG BAO GIỜ gầm rú quá to
+      const pauseLevel = Math.min(0.6, Math.max(D.duckLevel, D.duckLevel * 2.0));
+      window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: pauseLevel }, '*');
+    }
+  }
+
   // ─── TẢI CÀI ĐẶT TỪ CHROME STORAGE ───
   function syncSettings() {
     chrome.storage.local.get([
@@ -36,17 +60,16 @@
       if (data.geminiApiKey) D.geminiApiKey = data.geminiApiKey;
       if (data.dubbingVoice) D.voice = data.dubbingVoice;
       if (data.dubbingDuckLevel !== undefined) {
-        D.duckLevel = parseFloat(data.dubbingDuckLevel);
-        if (D.isSpeaking) {
-          window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: D.duckLevel }, '*');
-        }
+        D.duckLevel = Math.max(0, Math.min(1.0, parseFloat(data.dubbingDuckLevel)));
       }
       if (data.dubbingVolume !== undefined) {
-        D.dubVolume = parseFloat(data.dubbingVolume);
+        D.dubVolume = Math.max(0, Math.min(2.0, parseFloat(data.dubbingVolume)));
         if (D.dubGainNode && D.audioCtx) {
-          D.dubGainNode.gain.setValueAtTime(D.dubVolume, D.audioCtx.currentTime);
+          D.dubGainNode.gain.cancelScheduledValues(D.audioCtx.currentTime);
+          D.dubGainNode.gain.setTargetAtTime(D.dubVolume, D.audioCtx.currentTime, 0.03);
         }
       }
+      updateOriginalAudioDucking();
       updateDubButtonUI();
       if (D.enabled) {
         ensureDubbingRunning();
@@ -329,13 +352,6 @@
     // TẦNG 3: BẮT TRỰC TIẾP TỪ PHỤ ĐỀ ĐANG CHẠY TRÊN MÀN HÌNH (DOM OBSERVER)
     observeLiveDomCaptions();
     showToast('Đang đọc trực tiếp phụ đề trên màn hình', 'loading');
-
-    D.cues = parsedCues;
-    showToast(`Đã sẵn sàng lồng tiếng (${D.cues.length} câu)`, 'success');
-
-    // Bắt đầu xử lý hàng đợi câu nói ngay
-    const video = document.querySelector('video');
-    if (video) processQueue(video.currentTime);
   }
 
   // ─── THUẬT TOÁN RÚT GỌN TỪ ĐỆM TIẾNG VIỆT (TEXT CONDENSATION) ───
@@ -539,10 +555,8 @@
     stopCurrentAudio();
 
     D.isSpeaking = true;
+    updateOriginalAudioDucking();
     showToast(cue.viText || cue.text, 'speaking');
-
-    // 1. Kích hoạt Audio Ducking: Hạ âm lượng video YouTube gốc xuống 15%
-    window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: D.duckLevel }, '*');
 
     // 2. Tính toán tỷ lệ co giãn thời gian (Time-Stretching)
     if (cue.audioBuffer && D.audioCtx && D.dubGainNode) {
@@ -568,8 +582,7 @@
       source.onended = () => {
         D.isSpeaking = false;
         D.currentSource = null;
-        // Trả lại âm lượng gốc 100%
-        window.postMessage({ type: 'UB_AUDIO_DUCK', duck: false }, '*');
+        updateOriginalAudioDucking();
       };
 
       D.currentSource = source;
@@ -582,14 +595,15 @@
         const utter = new SpeechSynthesisUtterance(cue.viText || cue.text);
         utter.lang = 'vi-VN';
         utter.rate = 1.15;
-        utter.volume = D.dubVolume;
+        // SpeechSynthesisUtterance.volume chuẩn W3C từ 0.0 đến 1.0
+        utter.volume = Math.max(0, Math.min(1.0, D.dubVolume));
         utter.onend = () => {
           D.isSpeaking = false;
-          window.postMessage({ type: 'UB_AUDIO_DUCK', duck: false }, '*');
+          updateOriginalAudioDucking();
         };
         utter.onerror = () => {
           D.isSpeaking = false;
-          window.postMessage({ type: 'UB_AUDIO_DUCK', duck: false }, '*');
+          updateOriginalAudioDucking();
         };
         window.speechSynthesis.speak(utter);
       }
@@ -605,13 +619,14 @@
       window.speechSynthesis.cancel();
     }
     D.isSpeaking = false;
-    window.postMessage({ type: 'UB_AUDIO_DUCK', duck: false }, '*');
+    updateOriginalAudioDucking();
   }
 
   function stopAllDubbing() {
     stopCurrentAudio();
     hideToast();
     updateDubButtonUI();
+    updateOriginalAudioDucking();
   }
 
   // ─── VÒNG LẶP ĐỒNG BỘ THEO PLAYER CLOCK (TIMEUPDATE / RAF) ───
@@ -821,7 +836,8 @@
         dubLbl.textContent = Math.round(val * 100) + '%';
         D.dubVolume = val;
         if (D.dubGainNode && D.audioCtx) {
-          D.dubGainNode.gain.setValueAtTime(val, D.audioCtx.currentTime);
+          D.dubGainNode.gain.cancelScheduledValues(D.audioCtx.currentTime);
+          D.dubGainNode.gain.setTargetAtTime(val, D.audioCtx.currentTime, 0.03);
         }
         chrome.storage.local.set({ dubbingVolume: val });
       };
@@ -832,9 +848,7 @@
         const val = parseFloat(e.target.value);
         origLbl.textContent = Math.round(val * 100) + '%';
         D.duckLevel = val;
-        if (D.isSpeaking) {
-          window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: val }, '*');
-        }
+        updateOriginalAudioDucking();
         chrome.storage.local.set({ dubbingDuckLevel: val });
       };
 
@@ -884,20 +898,23 @@
 
   // ─── GIAO DIỆN NÚT BẤM TRÊN THANH ĐIỀU KHIỂN YOUTUBE ───
   function injectDubButton() {
-    const rightControls = document.querySelector('.ytp-right-controls');
+    const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    if (!player) return;
+
+    const rightControls = player.querySelector('.ytp-right-controls');
     if (!rightControls) return;
 
-    let btn = document.getElementById('ub-ytp-dub-btn');
-    if (btn && rightControls.contains(btn)) {
-      updateDubButtonUI();
-      return;
-    }
-
+    let btn = rightControls.querySelector('#ub-ytp-dub-btn');
     if (!btn) {
+      // Xóa các nút mồ côi ngoài rightControls
+      const orphans = document.querySelectorAll('#ub-ytp-dub-btn');
+      orphans.forEach(o => o.remove());
+
       btn = document.createElement('button');
       btn.id = 'ub-ytp-dub-btn';
-      btn.className = 'ytp-button';
-      btn.setAttribute('title', 'Lồng tiếng Tiếng Việt AI (Dubbing)');
+      btn.className = 'ytp-button ub-dub-button';
+      btn.setAttribute('title', 'Lồng tiếng Tiếng Việt AI (Bật/Tắt)');
+      btn.setAttribute('aria-label', 'Lồng tiếng Tiếng Việt AI');
       btn.style.cssText = `
         position: relative !important;
         display: inline-flex !important;
@@ -911,6 +928,9 @@
         padding: 0 !important;
         border: none !important;
         background: transparent !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        z-index: 50 !important;
       `;
 
       btn.onclick = (e) => {
@@ -920,59 +940,64 @@
         const newEnabled = !D.enabled;
         chrome.storage.local.set({ dubbingEnabled: newEnabled });
       };
+
+      const settingsBtn = rightControls.querySelector('.ytp-settings-button') ||
+                          rightControls.querySelector('.ytp-subtitles-button') ||
+                          rightControls.querySelector('.ytp-size-button');
+      if (settingsBtn) {
+        rightControls.insertBefore(btn, settingsBtn);
+      } else {
+        rightControls.prepend(btn);
+      }
     }
 
-    btn.innerHTML = `
-      <div id="ub-dub-icon-box" style="
-        display: flex;
-        align-items: center;
-        gap: 3px;
-        padding: 2px 6px;
-        border-radius: 6px;
-        background: ${D.enabled ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255,255,255,0.15)'};
-        border: 1px solid ${D.enabled ? '#00c853' : 'rgba(255,255,255,0.25)'};
-        box-shadow: ${D.enabled ? '0 0 10px rgba(0,230,118,0.5)' : 'none'};
-      ">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="${D.enabled ? '#00c853' : '#ffffff'}">
-          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-        </svg>
-        <span id="ub-dub-btn-label" style="
-          font-size: 11px;
-          font-weight: 800;
-          color: ${D.enabled ? '#00c853' : '#ffffff'};
-        ">VI</span>
-      </div>
-    `;
-
-    // Chèn trước nút cài đặt hoặc toàn màn hình
-    const settingsBtn = rightControls.querySelector('.ytp-settings-button');
-    if (settingsBtn) {
-      rightControls.insertBefore(btn, settingsBtn);
-    } else {
-      rightControls.prepend(btn);
-    }
+    updateDubButtonUI();
   }
 
   function updateDubButtonUI() {
     injectFloatingDubPill();
-    const box = document.getElementById('ub-dub-icon-box');
-    const label = document.getElementById('ub-dub-btn-label');
-    const svgPath = document.querySelector('#ub-dub-icon-box svg path');
-    if (!box || !label) return;
 
-    if (D.enabled) {
-      box.style.background = 'rgba(0, 200, 83, 0.35)';
-      box.style.borderColor = '#00c853';
-      box.style.boxShadow = '0 0 8px rgba(0, 200, 83, 0.6)';
-      label.style.color = '#00c853';
-      if (svgPath) svgPath.style.fill = '#00c853';
-    } else {
-      box.style.background = 'rgba(255,255,255,0.15)';
-      box.style.borderColor = 'rgba(255,255,255,0.25)';
-      box.style.boxShadow = 'none';
-      label.style.color = '#ffffff';
-      if (svgPath) svgPath.style.fill = '#ffffff';
+    const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player') || document;
+    const btn = player.querySelector('#ub-ytp-dub-btn');
+    if (btn) {
+      btn.innerHTML = `
+        <div id="ub-dub-icon-box" style="
+          display: flex;
+          align-items: center;
+          gap: 3px;
+          padding: 2px 6px;
+          border-radius: 6px;
+          background: ${D.enabled ? 'rgba(0, 200, 83, 0.4)' : 'rgba(255,255,255,0.18)'};
+          border: 1px solid ${D.enabled ? '#00e676' : 'rgba(255,255,255,0.3)'};
+          box-shadow: ${D.enabled ? '0 0 10px rgba(0,230,118,0.6)' : 'none'};
+          transition: all 0.2s ease;
+        ">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="${D.enabled ? '#00e676' : '#ffffff'}">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+          <span style="
+            font-size: 11px;
+            font-weight: 800;
+            color: ${D.enabled ? '#00e676' : '#ffffff'};
+            letter-spacing: 0.5px;
+          ">VI</span>
+        </div>
+      `;
+    }
+
+    // Đồng bộ slider trong mixer box
+    const dubSlider = document.getElementById('ub-mix-dub-input');
+    const dubLbl = document.getElementById('ub-mix-dub-lbl');
+    if (dubSlider && dubLbl) {
+      dubSlider.value = D.dubVolume;
+      dubLbl.textContent = Math.round(D.dubVolume * 100) + '%';
+    }
+    const origSlider = document.getElementById('ub-mix-orig-input');
+    const origLbl = document.getElementById('ub-mix-orig-lbl');
+    if (origSlider && origLbl) {
+      origSlider.value = D.duckLevel;
+      origLbl.textContent = Math.round(D.duckLevel * 100) + '%';
     }
   }
 

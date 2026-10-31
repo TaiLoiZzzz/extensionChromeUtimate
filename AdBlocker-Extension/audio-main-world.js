@@ -89,20 +89,20 @@
       studioLimiter.attack.setValueAtTime(0.002, audioCtx.currentTime);   // 2ms phản ứng cực nhạy
       studioLimiter.release.setValueAtTime(0.12, audioCtx.currentTime);   // 120ms nhả âm mượt mà, không bị phập phồng
 
-      // --- DẢI 0: DUCKING GAIN (HẠ ÂM LƯỢNG GỐC KHI THUYẾT MINH AI NÓI) ---
+      // --- DẢI 0: DUCKING GAIN (ĐẶT Ở CUỐI CHUỖI ĐỂ KIỂM SOÁT TRIỆT ĐỂ ÂM LƯỢNG) ---
       duckingGainNode = audioCtx.createGain();
       duckingGainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
 
       // NỐI CHUỖI XỬ LÝ ÂM THANH CHUYÊN NGHIỆP:
-      // Video Source -> Ducking Node -> 3-Band Studio EQ -> Pre-Gain -> Tube Saturator -> Studio Limiter -> Loa / Tai nghe
-      audioSource.connect(duckingGainNode);
-      duckingGainNode.connect(bassFilter);
+      // Video Source -> 3-Band Studio EQ -> Pre-Gain -> Tube Saturator -> Studio Limiter -> Ducking Gain Node -> Loa / Tai nghe
+      audioSource.connect(bassFilter);
       bassFilter.connect(midFilter);
       midFilter.connect(airFilter);
       airFilter.connect(preGainNode);
       preGainNode.connect(waveShaper);
       waveShaper.connect(studioLimiter);
-      studioLimiter.connect(audioCtx.destination);
+      studioLimiter.connect(duckingGainNode);
+      duckingGainNode.connect(audioCtx.destination);
 
       boundVideo = video;
       console.log('[UltraBlock DSP] 🎧 Audiophile Engine Activated! Gain =', currentGainValue);
@@ -124,11 +124,6 @@
       const player = document.getElementById('movie_player');
       if (player && typeof player.setStableVolume === 'function') {
         player.setStableVolume(false);
-      }
-      const v = document.querySelector('video');
-      if (v && !document.querySelector('.ad-showing')) {
-        v.muted = false;
-        v.volume = 1.0;
       }
     } catch (e) {}
   }
@@ -202,10 +197,26 @@
       }
       disableYouTubeCompression();
     } else if (event.data.type === 'UB_AUDIO_DUCK') {
+      const isDuck = Boolean(event.data.duck);
+      let targetGain = 1.0;
+      if (isDuck) {
+        targetGain = (event.data.level !== undefined && event.data.level !== null)
+          ? Math.max(0, Math.min(1.0, parseFloat(event.data.level)))
+          : 0.15;
+      }
+
       if (duckingGainNode && audioCtx) {
-        const targetGain = event.data.duck ? (parseFloat(event.data.level) || 0.15) : 1.0;
         duckingGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-        duckingGainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, event.data.duck ? 0.06 : 0.18);
+        duckingGainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.04);
+      }
+
+      const v = document.querySelector('video');
+      if (v) {
+        if (targetGain <= 0.005) {
+          v.muted = true;
+        } else {
+          v.muted = false;
+        }
       }
     } else if (event.data.type === 'UB_GET_CAPTIONS') {
       sendCaptionsToIsolatedWorld();
