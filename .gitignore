@@ -1,6 +1,7 @@
 # Chrome Extension temporary files
 AdBlocker-Extension/_metadata/
 AdBlocker-Extension/test_api.py
+*.mp3
 *.pyc
 __pycache__/
 .DS_Store

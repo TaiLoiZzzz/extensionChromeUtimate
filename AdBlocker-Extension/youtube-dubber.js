@@ -446,102 +446,39 @@
     return condensed;
   }
 
-  // ─── HÀM TẠO SEC-MS-GEC TOKEN CHO EDGE-TTS WEBSOCKET ───
-  async function generateSecMsGec() {
-    const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-    const WIN_EPOCH = 11644473600000000n;
-    const timestampTicks = BigInt(Math.floor(Date.now() / 1000)) * 10000000n + WIN_EPOCH;
-    const roundedTicks = timestampTicks - (timestampTicks % 3000000000n);
-    const strToHash = `${roundedTicks}${TRUSTED_CLIENT_TOKEN}`;
-    const msgBuffer = new TextEncoder().encode(strToHash);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+  // ─── HÀM CHUYỂN ĐỔI BASE64 SANG ARRAYBUFFER ───
+  function base64ToArrayBuffer(base64) {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
   }
 
-  // ─── TỔNG HỢP GIỌNG ĐỌC MICROSOFT EDGE-TTS QUA WEBSOCKET ───
+  // ─── TỔNG HỢP GIỌNG ĐỌC MICROSOFT EDGE-TTS QUA BACKGROUND SERVICE WORKER (DRM V2) ───
   async function fetchEdgeTTSAudio(text, voice) {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-        const secGec = await generateSecMsGec();
-        const requestId = crypto.randomUUID().replace(/-/g, '');
-        const wssUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secGec}&Sec-MS-GEC-Version=1-130.0.2849.68&ConnectionId=${requestId}`;
-
-        const ws = new WebSocket(wssUrl);
-        ws.binaryType = 'arraybuffer';
-        const audioChunks = [];
-        let isDone = false;
-
-        const timer = setTimeout(() => {
-          if (!isDone) {
-            try { ws.close(); } catch(e) {}
-            reject(new Error('Edge-TTS connection timeout'));
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: 'DUB_SYNTHESIZE_TTS',
+        text: text,
+        voice: voice || D.voice
+      }, resp => {
+        if (chrome.runtime.lastError) {
+          return reject(new Error(chrome.runtime.lastError.message));
+        }
+        if (resp && resp.ok && resp.audioBase64) {
+          try {
+            const buffer = base64ToArrayBuffer(resp.audioBase64);
+            resolve(buffer);
+          } catch (e) {
+            reject(e);
           }
-        }, 3000);
-
-        ws.onopen = () => {
-          const configMsg = `Content-Type:application/json;charset=utf-8\r\nPath:speech.config\r\n\r\n` +
-            JSON.stringify({
-              context: {
-                synthesis: {
-                  audio: {
-                    metadataoptions: { sentenceBoundaryEnabled: "false", wordBoundaryEnabled: "false" },
-                    outputFormat: "audio-24khz-48kbitrate-mono-mp3"
-                  }
-                }
-              }
-            });
-          ws.send(configMsg);
-
-          const safeText = text.replace(/[<>&"']/g, '');
-          const voiceName = voice || 'vi-VN-HoaiMyNeural';
-          const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='vi-VN'>` +
-            `<voice name='${voiceName}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${safeText}</prosody></voice></speak>`;
-          const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
-          ws.send(ssmlMsg);
-        };
-
-        ws.onmessage = event => {
-          if (typeof event.data === 'string') {
-            if (event.data.includes('Path:turn.end')) {
-              isDone = true;
-              clearTimeout(timer);
-              ws.close();
-
-              if (audioChunks.length === 0) {
-                reject(new Error('No audio received'));
-                return;
-              }
-
-              const totalLen = audioChunks.reduce((acc, c) => acc + c.byteLength, 0);
-              const merged = new Uint8Array(totalLen);
-              let offset = 0;
-              for (const c of audioChunks) {
-                merged.set(new Uint8Array(c), offset);
-                offset += c.byteLength;
-              }
-              resolve(merged.buffer);
-            }
-          } else if (event.data instanceof ArrayBuffer) {
-            // Tách header 2 bytes
-            if (event.data.byteLength > 2) {
-              const view = new DataView(event.data);
-              const headerLen = view.getInt16(0);
-              if (event.data.byteLength > headerLen + 2) {
-                audioChunks.push(event.data.slice(headerLen + 2));
-              }
-            }
-          }
-        };
-
-        ws.onerror = err => {
-          clearTimeout(timer);
-          reject(err);
-        };
-      } catch (e) {
-        reject(e);
-      }
+        } else {
+          reject(new Error(resp?.error || 'Edge-TTS synthesis failed'));
+        }
+      });
     });
   }
 
@@ -558,13 +495,6 @@
     });
   }
 
-  // ─── DỰ PHÒNG TỔNG HỢP TIẾNG QUA GOOGLE TTS HTTP ───
-  async function fetchGoogleTTSAudio(text) {
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Google TTS failed');
-    return await res.arrayBuffer();
-  }
 
   // ─── ĐẢM BẢO CÂU ĐƯỢC DỊCH VÀ TẠO GIỌNG ĐỌC HOÀN CHỈNH TRƯỚC KHI PHÁT ───
   function ensureCueReady(cue) {
@@ -634,16 +564,18 @@
             cue.audioBuffer = buffer;
             resolve(buffer);
           })
-          .catch(() => {
-            // Dự phòng Google TTS Audio
-            fetchGoogleTTSAudio(viText)
+          .catch(err => {
+            console.warn('[Dubber] Edge-TTS lần 1 thất bại, thử lại lần 2...', err);
+            // Thử lại lần 2 với Edge-TTS
+            fetchEdgeTTSAudio(viText, D.voice)
               .then(decodeAudioData)
               .then(buffer => {
                 cue.synthesizing = false;
                 cue.audioBuffer = buffer;
                 resolve(buffer);
               })
-              .catch(() => {
+              .catch(err2 => {
+                console.error('[Dubber] Edge-TTS thất bại:', err2);
                 cue.synthesizing = false;
                 resolve(null);
               });
