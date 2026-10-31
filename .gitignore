@@ -6,3 +6,9 @@ AdBlocker-Extension/test_api.py
 __pycache__/
 .DS_Store
 Thumbs.db
+
+# Environment variables
+.env
+.env.*
+!.env.example
+

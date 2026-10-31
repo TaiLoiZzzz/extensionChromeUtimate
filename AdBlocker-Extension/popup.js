@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (dubProvider) dubProvider.value = data.dubbingProvider || 'gemini';
 
     const geminiKeyInput = document.getElementById('geminiApiKey');
-    if (geminiKeyInput) geminiKeyInput.value = data.geminiApiKey || 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M';
+    if (geminiKeyInput) geminiKeyInput.value = data.geminiApiKey || '';
 
     const dubVoice = document.getElementById('dubbingVoice');
     if (dubVoice) dubVoice.value = data.dubbingVoice || 'vi-VN-HoaiMyNeural';

@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = {
   removeCookieBanners: true,
   dubbingEnabled: false,
   dubbingProvider: 'gemini',
-  geminiApiKey: 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M',
+  geminiApiKey: '',
   dubbingVoice: 'vi-VN-HoaiMyNeural',
   dubbingDuckLevel: 0.15,
   dubbingVolume: 1.0,
@@ -162,7 +162,7 @@ async function fetchGoogleTranslate(text, targetLang = 'vi') {
 // ─── FETCH GEMINI AI TRANSLATE VỚI RÀNG BUỘC ÂM TIẾT / THỜI LƯỢNG ───
 async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
   // Nếu không có API Key riêng hợp lệ của người dùng, chuyển thẳng sang Google Translate siêu tốc (~30ms)
-  if (!apiKey || apiKey.includes('AIzaSyCklhdUMekEOmueB6uqa7B7') || apiKey.trim().length < 10) {
+  if (!apiKey || apiKey.trim().length < 10) {
     return await fetchGoogleTranslate(text, 'vi');
   }
   const key = apiKey.trim();
