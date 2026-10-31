@@ -36,6 +36,19 @@ Chrome Extension: Chặn quảng cáo (YouTube, Banner, Popup, Cờ bạc), tăn
 - Bôi đen bất kỳ chữ nào -> Nhấn chuột phải -> Chọn "Dịch sang Tiếng Việt".
 - Trả về bản dịch chuẩn xác trong 30ms và tự động đổi chữ trực tiếp trên trang.
 
+### 6. Thuyết Minh Video YouTube Thời Gian Thực (AI Dubbing)
+- Ấn 1 nút kích hoạt ngay trên thanh điều khiển YouTube (nút VI) hoặc trong Popup.
+- Lấy phụ đề gốc (TimedText JSON3 / ASR) và tự động tính toán thời lượng từng câu.
+- Thuật toán đồng bộ thời lượng 4 lớp (4-Layer Duration Matching):
+  - Ràng buộc độ dài dịch thuật theo ngân sách âm tiết mục tiêu (~4.0 âm tiết/giây).
+  - Tận dụng khoảng lặng tự nhiên giữa 2 câu (mượn tối đa 70% khoảng nghỉ).
+  - Co giãn tốc độ giọng đọc tự động (Dynamic Time-Stretching 1.0x - 1.35x) bảo toàn cao độ.
+  - Tự động hạ âm lượng video gốc xuống 15% (Audio Ducking) khi thuyết minh đang nói.
+- Hỗ trợ 2 bộ máy dịch:
+  - Gemini AI: Dịch ngữ cảnh tự nhiên, ép khuôn số từ/âm tiết theo thời gian thực.
+  - Google Dịch: Tốc độ dịch siêu tốc ~30ms kết hợp bộ lọc rút gọn từ đệm.
+- Giọng đọc Microsoft Edge-TTS chuẩn Việt (Hoài My Nữ / Nam Minh Nam) qua kết nối WebSocket bảo mật với token Sec-MS-GEC. Có dự phòng Web Speech API tức thì.
+
 ---
 
 ## Cấu Trúc Dự Án
@@ -43,16 +56,17 @@ Chrome Extension: Chặn quảng cáo (YouTube, Banner, Popup, Cờ bạc), tăn
 ```
 AdBlocker-Extension/
 ├── manifest.json         # Khai báo quyền, content scripts, background worker (Manifest V3)
-├── background.js         # Service Worker quản lý bộ nhớ, cache, menu chuột phải
-├── audio-main-world.js   # Audio DSP Engine & Hook YouTube Player trong Main World
+├── background.js         # Service Worker quản lý bộ nhớ, cache, menu chuột phải, API dịch
+├── audio-main-world.js   # Audio DSP Engine, Ducking & Hook YouTube Player trong Main World
+├── youtube-dubber.js     # Engine lồng tiếng AI: lấy phụ đề, đo thời lượng, TTS, sync clock
 ├── youtube-blocker.js    # Tối ưu giao diện Pure Cinema & Skip Ads YouTube
 ├── content.js            # Quét và xóa DOM Ads, popup, betting banners
 ├── perf-injector.js      # Turbo Engine tối ưu hóa tốc độ tải trang toàn Chrome
 ├── translator.js         # Xử lý hiển thị kết quả dịch chuột phải
 ├── blocker.css           # CSS ẩn các thành phần quảng cáo & rác
-├── rules.json            # 50 Network blocking rules (Declarative Net Request)
+├── rules.json            # 51 Network rules (DNR & WebSocket header modifications)
 ├── popup.html            # Giao diện điều khiển tối giản
-├── popup.js              # Xử lý logic bật/tắt tính năng & thanh trượt âm thanh
+├── popup.js              # Xử lý logic bật/tắt tính năng & thanh trượt âm thanh, lồng tiếng
 └── icons/                # Icon extension độ phân giải 16x16, 48x48, 128x128
 ```
 

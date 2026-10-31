@@ -30,7 +30,7 @@
     },
     {
       "matches": ["*://*.youtube.com/*"],
-      "js": ["youtube-blocker.js"],
+      "js": ["youtube-blocker.js", "youtube-dubber.js"],
       "run_at": "document_start",
       "all_frames": false
     },
@@ -67,7 +67,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["blocker.css", "perf-injector.js", "audio-main-world.js"],
+      "resources": ["blocker.css", "perf-injector.js", "audio-main-world.js", "youtube-dubber.js"],
       "matches": ["<all_urls>"]
     }
   ]

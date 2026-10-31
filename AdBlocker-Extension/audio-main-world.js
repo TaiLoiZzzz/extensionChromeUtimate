@@ -8,6 +8,7 @@
   let currentGainValue = 2.2; // Khuếch đại tối ưu chuẩn Studio (220%)
   let audioCtx = null;
   let preGainNode = null;
+  let duckingGainNode = null;
   let waveShaper = null;
   let bassFilter = null;
   let midFilter = null;
@@ -15,6 +16,7 @@
   let studioLimiter = null;
   let audioSource = null;
   let boundVideo = null;
+  let cachedCaptionTracks = [];
 
   // ─── 1. THUẬT TOÁN TUBE SATURATION / SOFT CLIPPER (CHỐNG RÉO MÉO RÁC TAI) ───
   // Mô phỏng amply đèn điện tử (Analog Warmth): Uốn cong đỉnh sóng thay vì cắt phẳng
@@ -87,9 +89,14 @@
       studioLimiter.attack.setValueAtTime(0.002, audioCtx.currentTime);   // 2ms phản ứng cực nhạy
       studioLimiter.release.setValueAtTime(0.12, audioCtx.currentTime);   // 120ms nhả âm mượt mà, không bị phập phồng
 
+      // --- DẢI 0: DUCKING GAIN (HẠ ÂM LƯỢNG GỐC KHI THUYẾT MINH AI NÓI) ---
+      duckingGainNode = audioCtx.createGain();
+      duckingGainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
+
       // NỐI CHUỖI XỬ LÝ ÂM THANH CHUYÊN NGHIỆP:
-      // Video Source -> 3-Band Studio EQ -> Pre-Gain -> Tube Saturator -> Studio Limiter -> Loa / Tai nghe
-      audioSource.connect(bassFilter);
+      // Video Source -> Ducking Node -> 3-Band Studio EQ -> Pre-Gain -> Tube Saturator -> Studio Limiter -> Loa / Tai nghe
+      audioSource.connect(duckingGainNode);
+      duckingGainNode.connect(bassFilter);
       bassFilter.connect(midFilter);
       midFilter.connect(airFilter);
       airFilter.connect(preGainNode);
@@ -126,14 +133,41 @@
     } catch (e) {}
   }
 
-  // Lắng nghe lệnh đổi mức âm lượng từ Popup
+  function sendCaptionsToIsolatedWorld(tracks) {
+    if (!tracks || !tracks.length) {
+      tracks = window.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || cachedCaptionTracks;
+      if (!tracks || !tracks.length) {
+        try {
+          const mp = document.getElementById('movie_player');
+          if (mp && typeof mp.getOption === 'function') {
+            tracks = mp.getOption('captions', 'tracklist') || [];
+          }
+        } catch(e) {}
+      }
+    }
+    if (tracks && tracks.length > 0) {
+      cachedCaptionTracks = tracks;
+      window.postMessage({ type: 'UB_CAPTIONS_DATA', tracks }, '*');
+    }
+  }
+
+  // Lắng nghe lệnh đổi mức âm lượng, Ducking và lấy phụ đề từ Content Script
   window.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'UB_SET_AUDIO_GAIN') {
+    if (!event.data) return;
+    if (event.data.type === 'UB_SET_AUDIO_GAIN') {
       currentGainValue = parseFloat(event.data.gain) || 2.2;
       if (preGainNode && audioCtx) {
         preGainNode.gain.setTargetAtTime(currentGainValue, audioCtx.currentTime, 0.05);
       }
       disableYouTubeCompression();
+    } else if (event.data.type === 'UB_AUDIO_DUCK') {
+      if (duckingGainNode && audioCtx) {
+        const targetGain = event.data.duck ? (parseFloat(event.data.level) || 0.15) : 1.0;
+        duckingGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        duckingGainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, event.data.duck ? 0.06 : 0.18);
+      }
+    } else if (event.data.type === 'UB_GET_CAPTIONS') {
+      sendCaptionsToIsolatedWorld();
     }
   });
 
@@ -153,6 +187,9 @@
   function cleanAdData(obj) {
     if (!obj || typeof obj !== 'object') return obj;
     try {
+      if (obj.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+        sendCaptionsToIsolatedWorld(obj.captions.playerCaptionsTracklistRenderer.captionTracks);
+      }
       if (obj.adPlacements) delete obj.adPlacements;
       if (obj.playerAds) delete obj.playerAds;
       if (obj.adSlots) delete obj.adSlots;

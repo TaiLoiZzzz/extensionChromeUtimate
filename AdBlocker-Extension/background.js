@@ -12,6 +12,12 @@ const DEFAULT_SETTINGS = {
   boostPerf: true,
   lazyImages: true,
   removeCookieBanners: true,
+  dubbingEnabled: false,
+  dubbingProvider: 'gemini',
+  geminiApiKey: 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M',
+  dubbingVoice: 'vi-VN-HoaiMyNeural',
+  dubbingDuckLevel: 0.15,
+  dubbingVolume: 1.0,
   blockedTotal: 0,
   blockedToday: 0,
   savedKB: 0,
@@ -153,6 +159,56 @@ async function fetchGoogleTranslate(text, targetLang = 'vi') {
   return data[0].map(item => item[0]).join('');
 }
 
+// ─── FETCH GEMINI AI TRANSLATE VỚI RÀNG BUỘC ÂM TIẾT / THỜI LƯỢNG ───
+async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
+  const key = apiKey || 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M';
+  const models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+
+  let constraint = '';
+  if (targetDuration && targetDuration > 0) {
+    const maxWords = Math.max(3, Math.round(targetDuration * 3.8));
+    constraint = ` Câu dịch tiếng Việt phải cô đọng, tự nhiên, tối đa khoảng ${maxWords} từ để vừa vặn đọc trong ${targetDuration.toFixed(1)} giây.`;
+  }
+
+  const prompt = `Bạn là chuyên gia dịch thuật và lồng tiếng video YouTube.${constraint}\nDịch câu sau từ tiếng Anh sang tiếng Việt thật chuẩn xác và tự nhiên:\n"${text}"\nChỉ trả về duy nhất bản dịch tiếng Việt, không kèm giải thích hoặc dấu ngoặc kép.`;
+
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 120
+          }
+        })
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const output = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (output && output.trim()) {
+        return output.trim().replace(/^["']|["']$/g, '');
+      }
+    } catch (err) {}
+  }
+
+  // Dự phòng sang Google Translate nếu Gemini gặp lỗi mạng hoặc hạn ngạch
+  return await fetchGoogleTranslate(text, 'vi');
+}
+
+// ─── TẢI PHỤ ĐỀ YOUTUBE TIMEDTEXT XUYÊN DOMAIN ───
+async function fetchSubtitles(url) {
+  const res = await fetch(url);
+  if (url.includes('fmt=json3')) {
+    return await res.json();
+  }
+  const text = await res.text();
+  return text;
+}
+
 // ─── TỰ ĐỘNG GIẢI PHÓNG RAM CÁC TAB CHẠY NGẦM KHÔNG DÙNG (MEMORY SAVER) ───
 setInterval(() => {
   chrome.tabs.query({ active: false, discarded: false }, tabs => {
@@ -186,6 +242,31 @@ function incrementBlocked(count = 1, kb = 0) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'DUB_GET_SUBTITLES') {
+    fetchSubtitles(msg.url)
+      .then(data => sendResponse({ ok: true, data }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.type === 'DUB_TRANSLATE') {
+    const { text, targetDuration, provider, apiKey } = msg;
+    if (provider === 'gemini') {
+      fetchGeminiTranslate(text, apiKey, targetDuration)
+        .then(result => sendResponse({ ok: true, result, provider: 'gemini' }))
+        .catch(err => {
+          fetchGoogleTranslate(text, 'vi')
+            .then(result => sendResponse({ ok: true, result, provider: 'google_fallback' }))
+            .catch(e => sendResponse({ ok: false, error: e.message }));
+        });
+    } else {
+      fetchGoogleTranslate(text, 'vi')
+        .then(result => sendResponse({ ok: true, result, provider: 'google' }))
+        .catch(err => sendResponse({ ok: false, error: err.message }));
+    }
+    return true;
+  }
+
   if (msg.type === 'TRANSLATE_TEXT') {
     fetchGoogleTranslate(msg.text, msg.to || 'vi')
       .then(result => sendResponse({ ok: true, result }))

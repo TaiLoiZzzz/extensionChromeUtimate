@@ -448,5 +448,21 @@
       "urlFilter": "||ads.linkedin.com^",
       "resourceTypes": ["script","image","xmlhttprequest","sub_frame","media","stylesheet","font","other"]
     }
+  },
+  {
+    "id": 51,
+    "priority": 10,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "chrome-extension://jdiccldimpdaojbokhwihhlglblphclu" },
+        { "header": "Pragma", "operation": "set", "value": "no-cache" },
+        { "header": "Cache-Control", "operation": "set", "value": "no-cache" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "speech.platform.bing.com",
+      "resourceTypes": ["websocket", "xmlhttprequest"]
+    }
   }
 ]

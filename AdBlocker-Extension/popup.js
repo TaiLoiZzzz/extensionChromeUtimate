@@ -1,6 +1,16 @@
 // UltraBlock Pro - Popup Script
 
-const KEYS = ['autoTranslate', 'ytAutoHD'];
+const KEYS = ['autoTranslate','blockAds','blockBetting','removeCookieBanners','ytSkipAds','ytAutoHD','ytRemoveShorts'];
+
+function fmtNum(n) {
+  n = n || 0;
+  return n >= 1000 ? (n/1000).toFixed(1)+'K' : String(n);
+}
+function fmtKB(kb) {
+  kb = kb || 0;
+  if (kb >= 1024) return (kb/1024).toFixed(1)+'MB';
+  return Math.round(kb)+'KB';
+}
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -8,28 +18,14 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(null, data => {
     const enabled = data.enabled !== false;
     document.getElementById('masterToggle').checked = enabled;
+    document.getElementById('statusDot').className = 'stat-dot' + (enabled ? '' : ' off');
+    document.getElementById('countToday').textContent = fmtNum(data.blockedToday);
+    document.getElementById('savedKB').textContent = fmtKB(data.savedKB);
 
     KEYS.forEach(key => {
       const el = document.getElementById(key);
       if (el) el.checked = data[key] !== false;
     });
-
-    // Theme selector
-    const currentTheme = data.ytTheme || 'cyberpunk';
-    document.querySelectorAll('.theme-pill').forEach(pill => {
-      const theme = pill.dataset.theme;
-      if (theme === currentTheme) {
-        pill.classList.add('active');
-      } else {
-        pill.classList.remove('active');
-      }
-    });
-
-    const customInput = document.getElementById('customBgUrlInput');
-    if (currentTheme === 'custom') {
-      customInput.style.display = 'block';
-      customInput.value = data.ytCustomBgUrl || '';
-    }
 
     // Audio Gain
     const gain = parseFloat(data.ytAudioGain) || 2.2;
@@ -39,11 +35,26 @@ document.addEventListener('DOMContentLoaded', () => {
       gainSlider.value = gain;
       gainVal.textContent = Math.round(gain * 100) + '%';
     }
+
+    // AI Dubbing Settings
+    const dubEnabled = document.getElementById('dubbingEnabled');
+    if (dubEnabled) dubEnabled.checked = data.dubbingEnabled === true;
+
+    const dubProvider = document.getElementById('dubbingProvider');
+    if (dubProvider) dubProvider.value = data.dubbingProvider || 'gemini';
+
+    const geminiKeyInput = document.getElementById('geminiApiKey');
+    if (geminiKeyInput) geminiKeyInput.value = data.geminiApiKey || 'AIzaSyCklhdUMekEOmueB6uqa7B7_SKdnMKFu1M';
+
+    const dubVoice = document.getElementById('dubbingVoice');
+    if (dubVoice) dubVoice.value = data.dubbingVoice || 'vi-VN-HoaiMyNeural';
   });
 
   // Master toggle
   document.getElementById('masterToggle').addEventListener('change', e => {
-    chrome.storage.local.set({ enabled: e.target.checked });
+    const v = e.target.checked;
+    chrome.storage.local.set({ enabled: v });
+    document.getElementById('statusDot').className = 'stat-dot' + (v ? '' : ' off');
   });
 
   // Feature toggles
@@ -53,33 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Xử lý chọn hình nền phong cách (Theme Pills)
-  document.querySelectorAll('.theme-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      document.querySelectorAll('.theme-pill').forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-
-      const theme = pill.dataset.theme;
-      const customInput = document.getElementById('customBgUrlInput');
-
-      if (theme === 'custom') {
-        customInput.style.display = 'block';
-        customInput.focus();
-      } else {
-        customInput.style.display = 'none';
-        chrome.storage.local.set({ ytTheme: theme });
-      }
-    });
-  });
-
-  // Lưu link hình nền tự chọn
-  const customInput = document.getElementById('customBgUrlInput');
-  customInput?.addEventListener('input', e => {
-    const url = e.target.value.trim();
-    chrome.storage.local.set({ ytTheme: 'custom', ytCustomBgUrl: url });
-  });
-
-  // Slider âm thanh
+  // Slider kích âm thanh
   const gainSlider = document.getElementById('audioGainSlider');
   const gainVal = document.getElementById('audioGainVal');
   gainSlider?.addEventListener('input', e => {
@@ -88,12 +73,29 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.set({ ytAudioGain: val, ytAudioBoost: true });
   });
 
+  // AI Dubbing Listeners
+  document.getElementById('dubbingEnabled')?.addEventListener('change', e => {
+    chrome.storage.local.set({ dubbingEnabled: e.target.checked });
+  });
+
+  document.getElementById('dubbingProvider')?.addEventListener('change', e => {
+    chrome.storage.local.set({ dubbingProvider: e.target.value });
+  });
+
+  document.getElementById('geminiApiKey')?.addEventListener('change', e => {
+    chrome.storage.local.set({ geminiApiKey: e.target.value.trim() });
+  });
+
+  document.getElementById('dubbingVoice')?.addEventListener('change', e => {
+    chrome.storage.local.set({ dubbingVoice: e.target.value });
+  });
+
   // Xóa cache
-  document.getElementById('clearCacheBtn')?.addEventListener('click', function () {
-    this.textContent = 'Đang xóa...';
+  document.getElementById('clearCacheBtn')?.addEventListener('click', function() {
+    this.textContent = '⏳ Đang xóa...';
     chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' }, () => {
-      this.textContent = 'Đã xong!';
-      setTimeout(() => this.textContent = 'Xóa cache', 1500);
+      this.textContent = '✅ Xong!';
+      setTimeout(() => this.textContent = '🗑 Xóa cache', 1500);
     });
   });
 
