@@ -123,8 +123,8 @@
       const cue = cues[i];
       const nextStart = cues[i + 1] ? cues[i + 1].start : (cue.end + 2.0);
       cue.gap = Math.max(0, nextStart - cue.end);
-      cue.effectiveTarget = cue.duration + Math.min(0.7 * cue.gap, 0.6);
-      cue.maxSyllables = Math.max(3, Math.round(cue.effectiveTarget * 4.0));
+      cue.effectiveTarget = cue.duration + Math.min(0.6 * cue.gap, 0.8);
+      cue.maxSyllables = Math.max(4, Math.round(cue.effectiveTarget * 3.8));
     }
   }
 
@@ -181,89 +181,161 @@
     });
   }
 
+  // ─── THUẬT TOÁN TÁI CẤU TRÚC VÀ GHÉP MẢNH THÀNH CÂU HOÀN CHỈNH (SENTENCE RECONSTRUCTION) ───
+  function mergeFragmentsIntoSentences(fragments) {
+    if (!fragments || fragments.length === 0) return [];
+    
+    const sentences = [];
+    let batchStart = 0;
+    let batchEnd = 0;
+    let batchText = '';
+    let count = 0;
+
+    for (let i = 0; i < fragments.length; i++) {
+      const frag = fragments[i];
+      const clean = (frag.text || '').replace(/\s+/g, ' ').trim();
+      if (!clean) continue;
+
+      if (count === 0) {
+        batchStart = frag.start;
+        batchEnd = frag.end;
+        batchText = clean;
+        count = 1;
+      } else {
+        const gap = frag.start - batchEnd;
+        const currentDur = frag.end - batchStart;
+
+        // Tiêu chí nhận diện kết thúc 1 câu / vế hoàn chỉnh:
+        // 1. Dấu câu kết thúc rõ ràng (chấm, hỏi, than, ba chấm)
+        const endsWithPunct = /[.?!…]$/.test(batchText);
+        // 2. Người nói dừng lại lấy hơi (khoảng lặng gap >= 0.45s)
+        const hasNaturalPause = gap >= 0.45;
+        // 3. Đã nói đủ dài (>= 3.2s) và gặp dấu phẩy, chấm phẩy, gạch ngang
+        const hasClauseBreak = currentDur >= 3.2 && /[,;—–-]$/.test(batchText);
+        // 4. Độ dài tối ưu của 1 câu lồng tiếng đạt ngưỡng (currentDur >= 5.5s)
+        const isIdealMax = currentDur >= 5.5;
+
+        if (endsWithPunct || hasNaturalPause || hasClauseBreak || isIdealMax) {
+          const finalDuration = Math.max(1.0, batchEnd - batchStart);
+          sentences.push({
+            id: sentences.length,
+            start: batchStart,
+            end: batchEnd,
+            duration: finalDuration,
+            text: batchText,
+            viText: '',
+            audioBuffer: null,
+            translating: false,
+            synthesizing: false
+          });
+
+          // Bắt đầu câu kế tiếp
+          batchStart = frag.start;
+          batchEnd = frag.end;
+          batchText = clean;
+          count = 1;
+        } else {
+          // Nối tiếp vào câu hiện tại
+          batchEnd = frag.end;
+          batchText = batchText + ' ' + clean;
+          count++;
+        }
+      }
+    }
+
+    if (count > 0 && batchText) {
+      const finalDuration = Math.max(1.0, batchEnd - batchStart);
+      sentences.push({
+        id: sentences.length,
+        start: batchStart,
+        end: batchEnd,
+        duration: finalDuration,
+        text: batchText,
+        viText: '',
+        audioBuffer: null,
+        translating: false,
+        synthesizing: false
+      });
+    }
+
+    return sentences;
+  }
+
   // ─── BỘ PHÂN TÍCH PHỤ ĐỀ ĐA ĐỊNH DẠNG (JSON3 & XML TIMEDTEXT) ───
   function parseAnySubtitles(raw) {
     if (!raw) return [];
+
+    const rawFragments = [];
 
     // 1. Thử phân tích JSON3
     try {
       const json = typeof raw === 'string' ? JSON.parse(raw) : raw;
       if (json && Array.isArray(json.events) && json.events.length > 0) {
-        const cues = [];
-        json.events.forEach((ev, idx) => {
+        json.events.forEach((ev) => {
           if (!ev.segs || !ev.segs.length) return;
           const text = ev.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim();
           if (!text || text === '\n') return;
           const start = (ev.tStartMs || 0) / 1000;
           const duration = (ev.dDurationMs || 1500) / 1000;
-          cues.push({
-            id: idx,
+          rawFragments.push({
             start: start,
             duration: duration,
             end: start + duration,
-            text: text,
-            viText: '',
-            audioBuffer: null,
-            translating: false,
-            synthesizing: false
+            text: text
           });
         });
-        if (cues.length > 0) return cues;
       }
     } catch (e) {}
 
     // 2. Thử phân tích XML TimedText (<p t="..." d="..."> hoặc <text start="..." dur="...">)
-    try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(raw, 'text/xml');
-      const cues = [];
+    if (rawFragments.length === 0) {
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(raw, 'text/xml');
 
-      const pTags = doc.querySelectorAll('p');
-      if (pTags && pTags.length > 0) {
-        pTags.forEach((p, idx) => {
-          const text = (p.textContent || '').replace(/\n/g, ' ').trim();
-          if (!text) return;
-          const start = (parseFloat(p.getAttribute('t')) || 0) / 1000;
-          const duration = (parseFloat(p.getAttribute('d')) || 1500) / 1000;
-          cues.push({
-            id: idx,
-            start: start,
-            duration: duration,
-            end: start + duration,
-            text: text,
-            viText: '',
-            audioBuffer: null,
-            translating: false,
-            synthesizing: false
+        const pTags = doc.querySelectorAll('p');
+        if (pTags && pTags.length > 0) {
+          pTags.forEach((p) => {
+            const text = (p.textContent || '').replace(/\n/g, ' ').trim();
+            if (!text) return;
+            const start = (parseFloat(p.getAttribute('t')) || 0) / 1000;
+            const duration = (parseFloat(p.getAttribute('d')) || 1500) / 1000;
+            rawFragments.push({
+              start: start,
+              duration: duration,
+              end: start + duration,
+              text: text
+            });
           });
-        });
-        if (cues.length > 0) return cues;
-      }
+        }
 
-      const textTags = doc.querySelectorAll('text');
-      if (textTags && textTags.length > 0) {
-        textTags.forEach((t, idx) => {
-          const text = (t.textContent || '').replace(/\n/g, ' ').trim();
-          if (!text) return;
-          const start = parseFloat(t.getAttribute('start')) || 0;
-          const duration = parseFloat(t.getAttribute('dur')) || 1.5;
-          cues.push({
-            id: idx,
-            start: start,
-            duration: duration,
-            end: start + duration,
-            text: text,
-            viText: '',
-            audioBuffer: null,
-            translating: false,
-            synthesizing: false
-          });
-        });
-        if (cues.length > 0) return cues;
-      }
-    } catch (e) {}
+        if (rawFragments.length === 0) {
+          const textTags = doc.querySelectorAll('text');
+          if (textTags && textTags.length > 0) {
+            textTags.forEach((t) => {
+              const text = (t.textContent || '').replace(/\n/g, ' ').trim();
+              if (!text) return;
+              const start = parseFloat(t.getAttribute('start')) || 0;
+              const duration = parseFloat(t.getAttribute('dur')) || 1.5;
+              rawFragments.push({
+                start: start,
+                duration: duration,
+                end: start + duration,
+                text: text
+              });
+            });
+          }
+        }
+      } catch (e) {}
+    }
 
-    return [];
+    if (rawFragments.length === 0) return [];
+
+    // Tự động sắp xếp theo thứ tự thời gian tăng dần
+    rawFragments.sort((a, b) => a.start - b.start);
+
+    // Tái cấu trúc các mẩu vụn thành các câu hoàn chỉnh liền mạch
+    return mergeFragmentsIntoSentences(rawFragments);
   }
 
   // ─── TẢI PHỤ ĐỀ YOUTUBE TIMEDTEXT API (ĐA TẦNG DÒ TÌM SIÊU CẤP) ───
