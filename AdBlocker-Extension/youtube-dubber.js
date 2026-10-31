@@ -35,9 +35,14 @@
       if (data.dubbingProvider) D.provider = data.dubbingProvider;
       if (data.geminiApiKey) D.geminiApiKey = data.geminiApiKey;
       if (data.dubbingVoice) D.voice = data.dubbingVoice;
-      if (data.dubbingDuckLevel !== undefined) D.duckLevel = parseFloat(data.dubbingDuckLevel) || 0.15;
+      if (data.dubbingDuckLevel !== undefined) {
+        D.duckLevel = parseFloat(data.dubbingDuckLevel);
+        if (D.isSpeaking) {
+          window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: D.duckLevel }, '*');
+        }
+      }
       if (data.dubbingVolume !== undefined) {
-        D.dubVolume = parseFloat(data.dubbingVolume) || 1.0;
+        D.dubVolume = parseFloat(data.dubbingVolume);
         if (D.dubGainNode && D.audioCtx) {
           D.dubGainNode.gain.setValueAtTime(D.dubVolume, D.audioCtx.currentTime);
         }
@@ -742,7 +747,7 @@
     }
   }
 
-  // ─── NÚT NỔI TRỰC TIẾP TRÊN KHUNG VIDEO (100% LUÔN THẤY) ───
+  // ─── NÚT NỔI VÀ BẢNG TRỘN ÂM THANH TRỰC TIẾP TRÊN VIDEO ───
   function injectFloatingDubPill() {
     const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
     if (!player) return;
@@ -769,14 +774,71 @@
         font-weight: 700 !important;
         transition: all 0.25s ease !important;
       `;
-      pill.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        initAudioCtx();
-        const newEnabled = !D.enabled;
-        chrome.storage.local.set({ dubbingEnabled: newEnabled });
-      };
       player.appendChild(pill);
+    }
+
+    // Bảng mixer trực tiếp trên video
+    let mixer = document.getElementById('ub-video-mixer-box');
+    if (!mixer) {
+      mixer = document.createElement('div');
+      mixer.id = 'ub-video-mixer-box';
+      mixer.style.cssText = `
+        display: none;
+        position: absolute !important;
+        top: 50px !important;
+        right: 16px !important;
+        z-index: 60 !important;
+        background: rgba(18, 18, 24, 0.95) !important;
+        backdrop-filter: blur(12px) !important;
+        border: 1.5px solid #00e676 !important;
+        border-radius: 10px !important;
+        padding: 10px 14px !important;
+        width: 210px !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.85) !important;
+        user-select: none !important;
+      `;
+      mixer.innerHTML = `
+        <div style="font-size:11px;font-weight:800;color:#00e676;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">🎚️ Chỉnh Âm Lượng Trực Tiếp</div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#ddd;margin-bottom:2px;">
+          <span>🎙️ Giọng dịch:</span>
+          <span id="ub-mix-dub-lbl" style="color:#00e676;font-weight:700;">${Math.round(D.dubVolume * 100)}%</span>
+        </div>
+        <input type="range" id="ub-mix-dub-input" min="0" max="2.0" step="0.1" value="${D.dubVolume}" style="width:100%;height:4px;cursor:pointer;accent-color:#00e676;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#ddd;margin-bottom:2px;">
+          <span>🎬 Tiếng video gốc:</span>
+          <span id="ub-mix-orig-lbl" style="color:#00e676;font-weight:700;">${Math.round(D.duckLevel * 100)}%</span>
+        </div>
+        <input type="range" id="ub-mix-orig-input" min="0" max="1.0" step="0.05" value="${D.duckLevel}" style="width:100%;height:4px;cursor:pointer;accent-color:#00e676;">
+      `;
+
+      mixer.onclick = (e) => e.stopPropagation();
+
+      const dubSlider = mixer.querySelector('#ub-mix-dub-input');
+      const dubLbl = mixer.querySelector('#ub-mix-dub-lbl');
+      dubSlider.oninput = (e) => {
+        const val = parseFloat(e.target.value);
+        dubLbl.textContent = Math.round(val * 100) + '%';
+        D.dubVolume = val;
+        if (D.dubGainNode && D.audioCtx) {
+          D.dubGainNode.gain.setValueAtTime(val, D.audioCtx.currentTime);
+        }
+        chrome.storage.local.set({ dubbingVolume: val });
+      };
+
+      const origSlider = mixer.querySelector('#ub-mix-orig-input');
+      const origLbl = mixer.querySelector('#ub-mix-orig-lbl');
+      origSlider.oninput = (e) => {
+        const val = parseFloat(e.target.value);
+        origLbl.textContent = Math.round(val * 100) + '%';
+        D.duckLevel = val;
+        if (D.isSpeaking) {
+          window.postMessage({ type: 'UB_AUDIO_DUCK', duck: true, level: val }, '*');
+        }
+        chrome.storage.local.set({ dubbingDuckLevel: val });
+      };
+
+      player.appendChild(mixer);
     }
 
     if (D.enabled) {
@@ -784,13 +846,39 @@
       pill.style.color = '#ffffff';
       pill.style.border = '1.5px solid #00e676';
       pill.style.boxShadow = '0 0 15px rgba(0, 230, 118, 0.6)';
-      pill.innerHTML = `<span style="font-size:14px;">🎙️</span><span>Thuyết minh AI: BẬT</span>`;
+      pill.innerHTML = `
+        <span style="font-size:14px;">🎙️</span>
+        <span id="ub-pill-main-toggle">Thuyết minh AI: BẬT</span>
+        <span id="ub-pill-mixer-btn" style="margin-left:4px;padding:2px 6px;background:rgba(0,0,0,0.3);border-radius:10px;font-size:11px;" title="Chỉnh lớn nhỏ âm thanh">🎚️</span>
+      `;
+
+      pill.querySelector('#ub-pill-main-toggle').onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        initAudioCtx();
+        chrome.storage.local.set({ dubbingEnabled: false });
+      };
+
+      pill.querySelector('#ub-pill-mixer-btn').onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const m = document.getElementById('ub-video-mixer-box');
+        if (m) m.style.display = (m.style.display === 'none' || !m.style.display) ? 'block' : 'none';
+      };
+
     } else {
       pill.style.background = 'rgba(20, 20, 26, 0.8)';
       pill.style.color = '#eeeeee';
       pill.style.border = '1px solid rgba(255, 255, 255, 0.25)';
       pill.style.boxShadow = '0 4px 12px rgba(0,0,0,0.5)';
       pill.innerHTML = `<span style="font-size:14px;opacity:0.8;">🎙️</span><span>Lồng tiếng AI: TẮT</span>`;
+      pill.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        initAudioCtx();
+        chrome.storage.local.set({ dubbingEnabled: true });
+      };
+      if (mixer) mixer.style.display = 'none';
     }
   }
 

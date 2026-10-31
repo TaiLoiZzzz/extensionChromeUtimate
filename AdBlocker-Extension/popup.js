@@ -48,6 +48,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const dubVoice = document.getElementById('dubbingVoice');
     if (dubVoice) dubVoice.value = data.dubbingVoice || 'vi-VN-HoaiMyNeural';
+
+    // Âm lượng lồng tiếng
+    const dubVol = data.dubbingVolume !== undefined ? parseFloat(data.dubbingVolume) : 1.0;
+    const dubVolSlider = document.getElementById('dubVolumeSlider');
+    const dubVolVal = document.getElementById('dubVolumeVal');
+    if (dubVolSlider && dubVolVal) {
+      dubVolSlider.value = dubVol;
+      dubVolVal.textContent = Math.round(dubVol * 100) + '%';
+    }
+
+    // Âm lượng tiếng video gốc khi thuyết minh
+    const dubDuck = data.dubbingDuckLevel !== undefined ? parseFloat(data.dubbingDuckLevel) : 0.15;
+    const dubDuckSlider = document.getElementById('dubDuckSlider');
+    const dubDuckVal = document.getElementById('dubDuckVal');
+    if (dubDuckSlider && dubDuckVal) {
+      dubDuckSlider.value = dubDuck;
+      dubDuckVal.textContent = Math.round(dubDuck * 100) + '%';
+    }
   });
 
   // Master toggle
@@ -88,6 +106,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('dubbingVoice')?.addEventListener('change', e => {
     chrome.storage.local.set({ dubbingVoice: e.target.value });
+  });
+
+  // Slider chỉnh âm lượng giọng dịch
+  const dubVolSlider = document.getElementById('dubVolumeSlider');
+  const dubVolVal = document.getElementById('dubVolumeVal');
+  dubVolSlider?.addEventListener('input', e => {
+    const val = parseFloat(e.target.value);
+    dubVolVal.textContent = Math.round(val * 100) + '%';
+    chrome.storage.local.set({ dubbingVolume: val });
+  });
+
+  // Slider chỉnh âm lượng video gốc khi đang nói
+  const dubDuckSlider = document.getElementById('dubDuckSlider');
+  const dubDuckVal = document.getElementById('dubDuckVal');
+  dubDuckSlider?.addEventListener('input', e => {
+    const val = parseFloat(e.target.value);
+    dubDuckVal.textContent = Math.round(val * 100) + '%';
+    chrome.storage.local.set({ dubbingDuckLevel: val });
   });
 
   // Xóa cache

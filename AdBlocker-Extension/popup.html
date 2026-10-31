@@ -236,6 +236,11 @@ body {
 .dub-select:focus, .dub-input:focus {
   border-color: #00e676;
 }
+.dub-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: #00e676;
+}
 .dub-desc {
   font-size: 10px;
   color: #777;
@@ -335,7 +340,17 @@ body {
       <option value="vi-VN-NamMinhNeural">Nam Minh (Nam · Edge-TTS)</option>
     </select>
   </div>
-  <div class="dub-desc">Đồng bộ giọng nói khớp 100% video + Tự giảm nhạc nền 15%.</div>
+  <div class="dub-row" style="margin-top:8px;">
+    <span class="dub-lbl">Âm lượng lồng tiếng:</span>
+    <span class="dub-val" id="dubVolumeVal">100%</span>
+  </div>
+  <input type="range" class="audio-slider" id="dubVolumeSlider" min="0" max="2.0" step="0.1" value="1.0" style="margin-top:4px;">
+  <div class="dub-row" style="margin-top:8px;">
+    <span class="dub-lbl">Tiếng video gốc (khi đọc):</span>
+    <span class="dub-val" id="dubDuckVal">15%</span>
+  </div>
+  <input type="range" class="audio-slider" id="dubDuckSlider" min="0" max="1.0" step="0.05" value="0.15" style="margin-top:4px;">
+  <div class="dub-desc">Kéo thanh trượt để chỉnh lớn nhỏ tiếng dịch & tiếng gốc theo ý muốn.</div>
 </div>
 
 <div class="item">
