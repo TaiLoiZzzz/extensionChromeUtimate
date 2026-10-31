@@ -48,12 +48,21 @@
         will-change: transform !important;
       }
 
+      /* Bảo vệ và hiển thị đầy đủ thanh Search YouTube */
+      #masthead-container, ytd-masthead, #searchbox, #search, #search-form, ytd-searchbox {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+      }
+
       /* Khung video và Live Chat tự nhiên */
       ytd-watch-flexy:not([live]) #related {
         display: none !important;
       }
-      ytd-watch-flexy[theater] #chat-container {
+      #chat, #chat-container, ytd-live-chat-frame, iframe#chatframe {
         display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
       }
 
       /* Chỉ ẩn video đề xuất liên quan, giữ lại khung Chat trong #secondary */
@@ -61,8 +70,8 @@
         display: none !important;
       }
 
-      /* Xóa khu vực bình luận */
-      #comments, ytd-comments, #item-section {
+      /* Xóa khu vực bình luận dưới video thường, không ẩn item-section để tránh mất kết quả search */
+      #comments, ytd-comments {
         display: none !important;
       }
 

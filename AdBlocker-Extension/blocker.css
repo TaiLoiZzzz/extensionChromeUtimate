@@ -10,11 +10,19 @@ ins.adsbygoogle,[id^="google_ads"],[id^="div-gpt-ad"],
 }
 
 /* === Generic Ads === */
-[class*="ad-banner"],[class*="ad-container"],[class*="ad-wrapper"],
+[class*="ad-banner"],[class*="ad-wrapper"],
 [class*="ad-slot"],[class*="ad-unit"],[class*="adBanner"],
 [class*="adContainer"],[class*="adWrapper"],[id*="ad-banner"],
-[id*="ad-container"],[id*="ad-wrapper"],[id*="ad-slot"] {
+[id^="ad-container"],[id$="-ad-container"],[id="ad-container"],[id*="ad-wrapper"],[id*="ad-slot"] {
   display:none!important;
+}
+
+/* === BẢO VỆ TUYỆT ĐỐI THANH SEARCH VÀ LIVE CHAT YOUTUBE === */
+#masthead-container, ytd-masthead, #search, #searchbox, #search-input, #search-form,
+#chat, #chat-container, ytd-live-chat-frame, iframe#chatframe {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
 }
 
 /* === Betting / Gambling === */

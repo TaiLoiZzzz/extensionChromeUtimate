@@ -19,7 +19,7 @@
     '[data-adsbygoogle-status]','[class*="ad-banner"]','[class*="ad-container"]',
     '[class*="ad-wrapper"]','[class*="ad-slot"]','[class*="ad-unit"]',
     '[class*="adBlock"]','[class*="adContainer"]','[class*="adWrapper"]',
-    '[class*="adBanner"]','[id*="ad-banner"]','[id*="ad-container"]',
+    '[class*="adBanner"]','[id*="ad-banner"]','[id^="ad-container"]','[id="ad-container"]',
     '[id*="ad-wrapper"]','[id*="ad-slot"]','[id*="ad_unit"]',
     // Betting
     '[href*="vsbet"]','[src*="vsbet"]','[href*="colascore"]','[src*="colascore"]',
@@ -56,6 +56,10 @@
 
   function hideEl(el) {
     if (!el || el.dataset.ub2) return;
+    const id = el.id || '';
+    if (id.includes('masthead') || id.includes('search') || id.includes('chat')) return;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'ytd-masthead' || tag === 'ytd-searchbox' || tag === 'ytd-live-chat-frame') return;
     el.dataset.ub2 = '1';
     el.style.cssText += ';display:none!important;height:0!important;overflow:hidden!important;';
     blockedCount++;
