@@ -162,10 +162,10 @@ async function fetchGoogleTranslate(text, targetLang = 'vi') {
 // ─── FETCH GEMINI AI TRANSLATE VỚI RÀNG BUỘC ÂM TIẾT / THỜI LƯỢNG ───
 async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
   // Nếu không có API Key riêng hợp lệ của người dùng, chuyển thẳng sang Google Translate siêu tốc (~30ms)
-  if (!apiKey || apiKey.includes('AIzaSyCklhdUMekEOmueB6uqa7B7')) {
+  if (!apiKey || apiKey.includes('AIzaSyCklhdUMekEOmueB6uqa7B7') || apiKey.trim().length < 10) {
     return await fetchGoogleTranslate(text, 'vi');
   }
-  const key = apiKey;
+  const key = apiKey.trim();
   const models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
   let constraint = '';
@@ -190,7 +190,13 @@ async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
           }
         })
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        if (res.status === 400 || res.status === 401 || res.status === 403) {
+          // Lập tức fallback sang Google Translate siêu tốc (~30ms) nếu key lỗi hoặc hết hạn ngạch
+          return await fetchGoogleTranslate(text, 'vi');
+        }
+        continue;
+      }
       const data = await res.json();
       const output = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (output && output.trim()) {

@@ -133,10 +133,21 @@
     }
   }
 
-  // ─── LẤY VIDEO ID HIỆN TẠI ───
+  // ─── LẤY VIDEO ID HIỆN TẠI (ĐA NGUỒN: URL, SHORTS, PLAYER DATA) ───
   function getVideoId() {
     const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('v') || '';
+    const v = urlParams.get('v');
+    if (v) return v;
+    const match = location.pathname.match(/\/(?:shorts|embed|v)\/([a-zA-Z0-9_-]{11})/);
+    if (match) return match[1];
+    try {
+      const player = document.getElementById('movie_player');
+      if (player && typeof player.getVideoData === 'function') {
+        const data = player.getVideoData();
+        if (data && data.video_id) return data.video_id;
+      }
+    } catch(e) {}
+    return '';
   }
 
   // ─── GỌI MAIN WORLD FETCH TIMEDTEXT (CÙNG ORIGIN YOUTUBE.COM + COOKIES) ───
@@ -336,6 +347,31 @@
           }
         }
       } catch (e) {}
+    }
+
+    // 3. Phân tích dự phòng bằng biểu thức chính quy (Regex) nếu DOMParser gặp lỗi định dạng
+    if (rawFragments.length === 0 && typeof raw === 'string') {
+      const textRegex = /<text\s+[^>]*start="([\d.]+)"[^>]*dur="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/gi;
+      let m;
+      while ((m = textRegex.exec(raw)) !== null) {
+        const start = parseFloat(m[1]) || 0;
+        const dur = parseFloat(m[2]) || 1.5;
+        const clean = m[3].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+        if (clean) {
+          rawFragments.push({ start, duration: dur, end: start + dur, text: clean });
+        }
+      }
+      if (rawFragments.length === 0) {
+        const pRegex = /<p\s+[^>]*t="(\d+)"[^>]*d="(\d+)"[^>]*>([\s\S]*?)<\/p>/gi;
+        while ((m = pRegex.exec(raw)) !== null) {
+          const start = (parseInt(m[1], 10) || 0) / 1000;
+          const dur = (parseInt(m[2], 10) || 1500) / 1000;
+          const clean = m[3].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+          if (clean) {
+            rawFragments.push({ start, duration: dur, end: start + dur, text: clean });
+          }
+        }
+      }
     }
 
     if (rawFragments.length === 0) return [];
@@ -661,15 +697,16 @@
     }
 
     const curTime = video ? video.currentTime : 0;
-    // Chọn lô câu đầu tiên cần thuyết minh (3-4 câu đầu tính từ thời điểm hiện tại)
-    const initialBatch = D.cues.filter(c => c.end >= curTime && c.start <= curTime + 20).slice(0, 4);
+    // Chọn lô câu đầu tiên cần thuyết minh (luôn lấy 4 câu kế tiếp bất kể vị trí)
+    let initialBatch = D.cues.filter(c => c.end >= curTime).slice(0, 4);
+    if (initialBatch.length === 0 && D.cues.length > 0) {
+      initialBatch = D.cues.slice(0, 4);
+    }
 
     if (initialBatch.length > 0) {
-      for (let i = 0; i < initialBatch.length; i++) {
-        const c = initialBatch[i];
-        showToast(`⚡ Đang nạp & tối ưu đồng bộ (${i + 1}/${initialBatch.length} câu)...`, 'loading');
-        await ensureCueReady(c);
-      }
+      showToast(`⚡ Đang dịch & nạp đồng bộ (${initialBatch.length} câu đầu)...`, 'loading');
+      // Nạp song song đồng thời giúp tăng tốc 4 lần
+      await Promise.all(initialBatch.map(c => ensureCueReady(c)));
     }
 
     // Đã kiểm tra xong đầy đủ!
@@ -688,6 +725,7 @@
         await video.play();
       } catch (err) {
         console.warn('[Dubber] Autoplay blocked, waiting for user click:', err);
+        showToast('▶️ Bấm phát video để bắt đầu thuyết minh', 'loading');
       }
       startClockLoop(video);
       processQueue(video.currentTime);
