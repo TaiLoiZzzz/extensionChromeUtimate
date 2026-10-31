@@ -610,7 +610,7 @@
 
       await Promise.race([
         Promise.all(tasks),
-        new Promise(r => setTimeout(r, 1400))
+        new Promise(r => setTimeout(r, 2000))
       ]);
 
       if (wasPlaying && video) {
@@ -642,6 +642,11 @@
 
   // ─── LỚP 3 & 4: PHÁT ÂM THANH ĐỒNG BỘ THỜI GIAN THỰC + DUCKING NHẠC NỀN ───
   function playCueAudio(cue) {
+    if (!cue || !cue.audioBuffer) {
+      D.isSpeaking = false;
+      return;
+    }
+
     initAudioCtx();
     stopCurrentAudio();
 
@@ -649,25 +654,11 @@
     updateOriginalAudioDucking();
     showToast(cue.viText || cue.text, 'speaking');
 
-    // 2. Tính toán tỷ lệ co giãn thời gian (Time-Stretching)
-    if (cue.audioBuffer && D.audioCtx && D.dubGainNode) {
-      const audioDuration = cue.audioBuffer.duration;
-      const targetDuration = cue.effectiveTarget || cue.duration || 1.5;
-      
-      // Tỷ lệ R = Thời lượng âm thanh thực / Thời lượng cho phép
-      const R = audioDuration / targetDuration;
-      
-      // Co giãn tốc độ mượt mà từ 1.0x đến 1.35x
-      let rate = 1.0;
-      if (R > 1.05 && R <= 1.35) {
-        rate = R;
-      } else if (R > 1.35) {
-        rate = 1.35; // Khống chế trần để giọng không bị biến dạng
-      }
-
+    if (D.audioCtx && D.dubGainNode) {
       const source = D.audioCtx.createBufferSource();
       source.buffer = cue.audioBuffer;
-      source.playbackRate.setValueAtTime(rate, D.audioCtx.currentTime);
+      // Giữ nguyên tốc độ chuẩn 1.0x (Tránh biến âm làm méo cao độ giọng Neural tự nhiên)
+      source.playbackRate.setValueAtTime(1.0, D.audioCtx.currentTime);
       source.connect(D.dubGainNode);
 
       source.onended = () => {
@@ -678,29 +669,6 @@
 
       D.currentSource = source;
       source.start(0);
-
-    } else {
-      // Dự phòng 2: Web Speech API (Chỉ đọc nếu đã có bản dịch tiếng Việt)
-      if ('speechSynthesis' in window && cue.viText) {
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(cue.viText);
-        utter.lang = 'vi-VN';
-        utter.rate = 1.15;
-        // SpeechSynthesisUtterance.volume chuẩn W3C từ 0.0 đến 1.0
-        utter.volume = Math.max(0, Math.min(1.0, D.dubVolume));
-        utter.onend = () => {
-          D.isSpeaking = false;
-          updateOriginalAudioDucking();
-        };
-        utter.onerror = () => {
-          D.isSpeaking = false;
-          updateOriginalAudioDucking();
-        };
-        window.speechSynthesis.speak(utter);
-      } else {
-        D.isSpeaking = false;
-        updateOriginalAudioDucking();
-      }
     }
   }
 
@@ -708,9 +676,6 @@
     if (D.currentSource) {
       try { D.currentSource.stop(); } catch (e) {}
       D.currentSource = null;
-    }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
     }
     D.isSpeaking = false;
     updateOriginalAudioDucking();
@@ -747,13 +712,13 @@
       if (cueIndex !== -1 && cueIndex !== D.activeCueIndex) {
         const cue = D.cues[cueIndex];
         
-        if (cue.audioBuffer || cue.viText) {
+        if (cue.audioBuffer) {
           D.activeCueIndex = cueIndex;
           playCueAudio(cue);
         } else {
-          // Nếu câu này đang được nạp dở: ưu tiên hoàn tất và phát ngay khi xong
-          ensureCueReady(cue).then(() => {
-            if (D.enabled && !D.isSpeaking && Math.abs(video.currentTime - cue.start) < (cue.duration + 1.2)) {
+          // Nếu câu này chưa nạp xong: ưu tiên nạp và chỉ phát khi có audioBuffer chuẩn Microsoft Neural
+          ensureCueReady(cue).then((buf) => {
+            if (buf && D.enabled && !D.isSpeaking && Math.abs(video.currentTime - cue.start) < (cue.duration + 2.0)) {
               D.activeCueIndex = cueIndex;
               playCueAudio(cue);
             }
@@ -774,16 +739,10 @@
       if (D.audioCtx && D.audioCtx.state === 'running') {
         D.audioCtx.suspend().catch(() => {});
       }
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.pause();
-      }
     });
 
     video.addEventListener('play', () => {
       initAudioCtx();
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.resume();
-      }
     });
   }
 

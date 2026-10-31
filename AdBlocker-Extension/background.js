@@ -199,6 +199,32 @@ async function fetchGeminiTranslate(text, apiKey, targetDuration = null) {
   return await fetchGoogleTranslate(text, 'vi');
 }
 
+// ─── ĐĂNG KÝ DYNAMIC RULES CHO BẢN QUYỀN WEBSOCKET EDGE-TTS ───
+try {
+  chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: [51001],
+    addRules: [
+      {
+        id: 51001,
+        priority: 9999,
+        action: {
+          type: "modifyHeaders",
+          requestHeaders: [
+            { header: "Origin", operation: "set", value: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold" },
+            { header: "User-Agent", operation: "set", value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0" },
+            { header: "Pragma", operation: "set", value: "no-cache" },
+            { header: "Cache-Control", operation: "set", value: "no-cache" }
+          ]
+        },
+        condition: {
+          urlFilter: "*speech.platform.bing.com*",
+          resourceTypes: ["websocket", "xmlhttprequest", "other"]
+        }
+      }
+    ]
+  }).catch(() => {});
+} catch (e) {}
+
 // ─── MICROSOFT EDGE-TTS DRM V2 TOKEN ENGINE ───
 const EDGE_TRUSTED_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const WIN_EPOCH = 11644473600n;
@@ -462,7 +488,8 @@ async function fetchBackgroundEdgeTTS(text, voice) {
       }, 5000);
 
       ws.onopen = () => {
-        const configMsg = `Content-Type:application/json;charset=utf-8\r\nPath:speech.config\r\n\r\n` +
+        const dateStr = new Date().toString();
+        const configMsg = `X-Timestamp:${dateStr}\r\nContent-Type:application/json;charset=utf-8\r\nPath:speech.config\r\n\r\n` +
           JSON.stringify({
             context: {
               synthesis: {
@@ -472,14 +499,14 @@ async function fetchBackgroundEdgeTTS(text, voice) {
                 }
               }
             }
-          });
+          }) + "\r\n";
         ws.send(configMsg);
 
         const safeText = text.replace(/[<>&"']/g, '');
         const voiceName = voice || 'vi-VN-NamMinhNeural';
         const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='vi-VN'>` +
           `<voice name='${voiceName}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${safeText}</prosody></voice></speak>`;
-        const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
+        const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${dateStr}Z\r\nPath:ssml\r\n\r\n${ssml}`;
         ws.send(ssmlMsg);
       };
 
@@ -523,8 +550,16 @@ async function fetchBackgroundEdgeTTS(text, voice) {
         }
       };
 
+      ws.onclose = event => {
+        if (!isDone) {
+          clearTimeout(timer);
+          reject(new Error(`WebSocket closed early: code ${event.code}`));
+        }
+      };
+
       ws.onerror = err => {
         clearTimeout(timer);
+        console.error('[Edge-TTS] Connection error:', err);
         reject(err);
       };
     } catch (e) {
