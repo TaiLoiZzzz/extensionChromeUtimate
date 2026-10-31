@@ -789,6 +789,17 @@ function incrementBlocked(count = 1, kb = 0) {
   });
 }
 
+// ─── GIỮ SERVICE WORKER KHÔNG BỊ CHROME NGẮT KHI XEM VIDEO DÀI (CHỐNG NGỦ QUÊN TRONG MV3) ───
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name === 'ub-keepalive') {
+    port.onMessage.addListener(msg => {
+      if (msg && msg.type === 'PING') {
+        try { port.postMessage({ type: 'PONG' }); } catch(e) {}
+      }
+    });
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'DUB_FETCH_INNERTUBE_SUBTITLES') {
     fetchInnerTubeSubtitles(msg.videoId)

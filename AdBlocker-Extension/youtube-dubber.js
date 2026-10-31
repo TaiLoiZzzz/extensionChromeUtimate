@@ -583,89 +583,69 @@
   }
 
 
-  // ─── ĐẢM BẢO CÂU ĐƯỢC DỊCH, TỔNG HỢP VÀ TÍNH TOÁN ĐỒNG BỘ ───
+  // ─── ĐẢM BẢO CÂU ĐƯỢC DỊCH VÀ TẠO GIỌNG ĐỌC (MEMOIZED PROMISE, KHÔNG INTERVAL, CHỐNG NGHẼN RAM) ───
   function ensureCueReady(cue) {
     if (!cue) return Promise.resolve(null);
-    if (cue.audioBuffer || cue.audioBlobUrl) return Promise.resolve(cue.audioBuffer);
+    if (cue.audioBuffer || cue.audioBlobUrl) return Promise.resolve(cue.audioBuffer || cue.audioBlobUrl);
+    if (cue._readyPromise) return cue._readyPromise;
 
-    return new Promise((resolve) => {
-      // 1. Dịch văn bản nếu chưa có viText
-      const getViText = () => {
-        if (cue.viText) return Promise.resolve(cue.viText);
-        if (cue.translating) {
-          return new Promise(r => {
-            const check = setInterval(() => {
-              if (!cue.translating) {
-                clearInterval(check);
-                r(cue.viText || cue.text);
-              }
-            }, 40);
-            setTimeout(() => { clearInterval(check); r(cue.viText || cue.text); }, 3500);
-          });
-        }
-
-        cue.translating = true;
-        return new Promise(r => {
-          const timer = setTimeout(() => {
-            cue.translating = false;
-            cue.viText = cue.text;
-            r(cue.text);
-          }, 3500);
-
-          try {
-            chrome.runtime.sendMessage({
-              type: 'DUB_TRANSLATE',
-              text: cue.text,
-              targetDuration: cue.effectiveTarget || cue.duration,
-              provider: D.provider,
-              apiKey: D.geminiApiKey
-            }, resp => {
-              clearTimeout(timer);
-              cue.translating = false;
-              if (resp && resp.ok && resp.result) {
-                cue.viText = condenseVietnameseText(resp.result, cue.maxSyllables || 20);
-              } else {
-                cue.viText = cue.text;
-              }
-              r(cue.viText || cue.text);
-            });
-          } catch(e) {
-            clearTimeout(timer);
-            cue.translating = false;
-            cue.viText = cue.text;
-            r(cue.text);
-          }
-        });
-      };
-
-      // 2. Tạo giọng đọc Edge-TTS sau khi đã có bản dịch
-      getViText().then(viText => {
+    cue._readyPromise = (async () => {
+      try {
+        // 1. Dịch văn bản nếu chưa có tiếng Việt
+        let viText = cue.viText;
         if (!viText) {
-          resolve(null);
-          return;
-        }
-        if (cue.audioBuffer || cue.audioBlobUrl) {
-          resolve(cue.audioBuffer);
-          return;
-        }
-        if (cue.synthesizing) {
-          const check = setInterval(() => {
-            if (!cue.synthesizing) {
-              clearInterval(check);
-              resolve(cue.audioBuffer || null);
+          viText = await new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(cue.text), 3500);
+            try {
+              chrome.runtime.sendMessage({
+                type: 'DUB_TRANSLATE',
+                text: cue.text,
+                targetDuration: cue.effectiveTarget || cue.duration,
+                provider: D.provider,
+                apiKey: D.geminiApiKey
+              }, resp => {
+                clearTimeout(timer);
+                if (resp && resp.ok && resp.result) {
+                  resolve(condenseVietnameseText(resp.result, cue.maxSyllables || 20));
+                } else {
+                  resolve(cue.text);
+                }
+              });
+            } catch (e) {
+              clearTimeout(timer);
+              resolve(cue.text);
             }
-          }, 40);
-          setTimeout(() => { clearInterval(check); resolve(cue.audioBuffer || null); }, 3500);
-          return;
+          });
+          cue.viText = viText;
         }
 
-        cue.synthesizing = true;
-        const finalizeResult = (res, decodedBuf) => {
-          cue.synthesizing = false;
-          cue.audioBuffer = decodedBuf;
-          cue.audioBlobUrl = res.blobUrl;
+        if (!viText || !D.enabled) return null;
 
+        // 2. Tạo giọng đọc Edge-TTS / Google TTS
+        let audioRes = null;
+        try {
+          audioRes = await fetchEdgeTTSAudio(viText, D.voice);
+        } catch (err) {
+          // Thử lại lần 2 nếu lỗi mạng chập chờn
+          try {
+            audioRes = await fetchEdgeTTSAudio(viText, D.voice);
+          } catch (err2) {
+            audioRes = null;
+          }
+        }
+
+        if (!audioRes) {
+          cue._failed = true;
+          return null;
+        }
+
+        cue.audioBlobUrl = audioRes.blobUrl;
+
+        // Giải mã Web Audio buffer
+        if (audioRes.buffer) {
+          const decodedBuf = await decodeAudioData(audioRes.buffer);
           if (decodedBuf) {
+            cue.audioBuffer = decodedBuf;
             cue.silenceOffset = detectLeadingSilence(decodedBuf);
             const usableAudioDur = Math.max(0.1, decodedBuf.duration - (cue.silenceOffset || 0));
             const availableVideoDur = cue.effectiveTarget || cue.duration;
@@ -674,32 +654,20 @@
               optimalRate = Math.min(1.25, Math.max(1.0, usableAudioDur / (availableVideoDur * 0.95)));
             }
             cue.calculatedRate = optimalRate;
-          } else {
-            cue.calculatedRate = 1.0;
           }
-          resolve(decodedBuf || res.blobUrl);
-        };
+        }
+        if (!cue.calculatedRate) cue.calculatedRate = 1.0;
 
-        fetchEdgeTTSAudio(viText, D.voice)
-          .then(async res => {
-            const decoded = await decodeAudioData(res.buffer);
-            finalizeResult(res, decoded);
-          })
-          .catch(err => {
-            console.warn('[Dubber] Thử lại tổng hợp âm thanh...', err);
-            fetchEdgeTTSAudio(viText, D.voice)
-              .then(async res => {
-                const decoded = await decodeAudioData(res.buffer);
-                finalizeResult(res, decoded);
-              })
-              .catch(err2 => {
-                console.error('[Dubber] Tổng hợp âm thanh thất bại:', err2);
-                cue.synthesizing = false;
-                resolve(null);
-              });
-          });
-      });
-    });
+        return cue.audioBuffer || cue.audioBlobUrl;
+      } catch (e) {
+        cue._failed = true;
+        return null;
+      } finally {
+        cue._readyPromise = null;
+      }
+    })();
+
+    return cue._readyPromise;
   }
 
   // ─── QUẢN LÝ ĐƠN LUỒNG PHÁT ĐỘC QUYỀN VÀ PIPELINE GỐI ĐẦU TUẦN TỰ ───
@@ -738,18 +706,39 @@
     if (!D.enabled || !D.cues || D.cues.length === 0) return;
     const targets = D.cues.slice(startIndex, startIndex + count);
     for (const cue of targets) {
-      if (!cue.audioBuffer && !cue.audioBlobUrl && !cue.synthesizing && !cue.translating) {
+      if (!cue.audioBuffer && !cue.audioBlobUrl && !cue._failed && !cue._readyPromise) {
         ensureCueReady(cue);
       }
     }
   }
 
-  // ─── DUY TRÌ HÀNG ĐỢI NẠP TRƯỚC 25 GIÂY ───
+  // ─── DUY TRÌ HÀNG ĐỢI NẠP TRƯỚC 25 GIÂY VÀ GIẢI PHÓNG RAM CHO VIDEO DÀI ───
+  let lastQueueScanTime = 0;
   function processQueue(currentTime) {
     if (!D.enabled || !D.cues || D.cues.length === 0 || D.isPreparing) return;
+    const now = Date.now();
+    // Tiết kiệm CPU: chỉ quét hàng đợi 1 lần mỗi 800ms thay vì mỗi khung hình
+    if (now - lastQueueScanTime < 800) return;
+    lastQueueScanTime = now;
+
+    // 1. Tự động thu hồi bộ nhớ các câu đã nói qua hơn 60 giây trước (chống tràn RAM khi xem video dài hàng tiếng)
+    for (let i = 0; i < D.cues.length; i++) {
+      const c = D.cues[i];
+      if (c.end < currentTime - 60) {
+        if (c.audioBlobUrl) {
+          try { URL.revokeObjectURL(c.audioBlobUrl); } catch (e) {}
+          c.audioBlobUrl = null;
+        }
+        c.audioBuffer = null;
+      } else if (c.start > currentTime + 30) {
+        break; // Danh sách cues đã được sort theo start, dừng sớm để tiết kiệm CPU
+      }
+    }
+
+    // 2. Nạp trước các câu trong khoảng [currentTime - 1, currentTime + 25]
     const upcomingCues = D.cues.filter(c => c.start >= currentTime - 1 && c.start <= currentTime + 25);
     for (const cue of upcomingCues) {
-      if (!cue.audioBuffer && !cue.audioBlobUrl && !cue.synthesizing && !cue.translating) {
+      if (!cue.audioBuffer && !cue.audioBlobUrl && !cue._failed && !cue._readyPromise) {
         ensureCueReady(cue);
       }
     }
@@ -796,11 +785,11 @@
         const nextCue = D.cues[nextIdx];
         const curT = video.currentTime;
 
-        // Nếu video đã tới hoặc sắp tới câu tiếp theo (khoảng cách <= 1.2s hoặc đang trong tầm câu tiếp):
-        if (curT + 1.2 >= nextCue.start && curT <= nextCue.end + 3.0) {
+        // Nếu video đã tới hoặc sắp tới câu tiếp theo (khoảng cách <= 1.5s hoặc đang trong tầm câu tiếp):
+        if (curT + 1.5 >= nextCue.start && curT <= nextCue.end + 3.0) {
           if (nextCue.audioBuffer || nextCue.audioBlobUrl) {
             playCueByIndex(nextIdx);
-          } else {
+          } else if (!nextCue._failed) {
             // Nếu đang trong tích tắc hoàn tất nạp (đã gối đầu trước): phát ngay khi sẵn sàng
             ensureCueReady(nextCue).then(() => {
               if (myToken === P.token && !P.isPlaying && !video.paused && P.targetIndex === nextIdx) {
@@ -955,13 +944,22 @@
     if (!cue) return;
 
     // Nếu video nhảy xa (do tua video): tìm lại chỉ số câu phù hợp
-    if (t > cue.end + 3.0 || t < cue.start - 6.0) {
+    if (t > cue.end + 4.0 || t < cue.start - 6.0) {
       const newIdx = D.cues.findIndex(c => t <= c.end);
       if (newIdx !== -1) {
         P.targetIndex = newIdx;
         idx = newIdx;
         cue = D.cues[idx];
+      } else {
+        return;
       }
+    }
+
+    // Nếu video đã chạy vượt qua đuôi của câu hiện tại (+0.8s):
+    // Tự động bỏ qua câu này để chuyển sang câu tiếp theo, không bao giờ bị nghẽn lại giữa video!
+    if (t > cue.end + 0.8) {
+      P.targetIndex = idx + 1;
+      return;
     }
 
     const leadTime = 0.35 + (D.syncOffset || 0);
@@ -970,12 +968,15 @@
     if (t + leadTime >= cue.start && t <= cue.end + 2.5) {
       if (cue.audioBuffer || cue.audioBlobUrl) {
         playCueByIndex(idx);
-      } else {
+      } else if (!cue._failed) {
         ensureCueReady(cue).then(() => {
           if (!P.isPlaying && !video.paused && P.targetIndex === idx) {
             playCueByIndex(idx);
           }
         });
+      } else {
+        // Câu này bị lỗi âm thanh: bỏ qua để nói câu tiếp theo
+        P.targetIndex = idx + 1;
       }
     }
   }
@@ -1465,8 +1466,35 @@
     prepareAndStartDubbing(v);
   }
 
+  // ─── DUY TRÌ KẾT NỐI VỚI BACKGROUND WORKER XUYÊN SUỐT VIDEO DÀI (CHỐNG MẤT DỊCH SAU VÀI PHÚT) ───
+  let bgKeepAlivePort = null;
+  function maintainServiceWorkerAlive() {
+    if (bgKeepAlivePort) return;
+    try {
+      bgKeepAlivePort = chrome.runtime.connect({ name: 'ub-keepalive' });
+      bgKeepAlivePort.onDisconnect.addListener(() => {
+        bgKeepAlivePort = null;
+        if (D.enabled) {
+          setTimeout(maintainServiceWorkerAlive, 1000);
+        }
+      });
+    } catch (e) {
+      bgKeepAlivePort = null;
+    }
+  }
+
+  setInterval(() => {
+    if (D.enabled) {
+      maintainServiceWorkerAlive();
+      if (bgKeepAlivePort) {
+        try { bgKeepAlivePort.postMessage({ type: 'PING' }); } catch (e) { bgKeepAlivePort = null; }
+      }
+    }
+  }, 15000);
+
   // ─── KHỞI TẠO TIỆN ÍCH ───
   function init() {
+    maintainServiceWorkerAlive();
     syncSettings();
     observeVideoChanges();
     setInterval(() => {
