@@ -212,12 +212,13 @@ try {
           requestHeaders: [
             { header: "Origin", operation: "set", value: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold" },
             { header: "User-Agent", operation: "set", value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0" },
+            { header: "Cookie", operation: "set", value: "muid=5A6B7C8D9E0F1A2B3C4D5E6F7A8B9C0D;" },
             { header: "Pragma", operation: "set", value: "no-cache" },
             { header: "Cache-Control", operation: "set", value: "no-cache" }
           ]
         },
         condition: {
-          urlFilter: "*speech.platform.bing.com*",
+          urlFilter: "speech.platform.bing.com",
           resourceTypes: ["websocket", "xmlhttprequest", "other"]
         }
       }
@@ -230,6 +231,20 @@ const EDGE_TRUSTED_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const WIN_EPOCH = 11644473600n;
 const S_TO_NS = 1000000000n;
 const _U32_MASK = 0xFFFFFFFFn;
+
+let edgeClockSkew = 0n;
+async function syncEdgeClockSkew() {
+  try {
+    const res = await fetch('https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=' + EDGE_TRUSTED_TOKEN, { method: 'HEAD' });
+    const sDate = res.headers.get('date');
+    if (sDate) {
+      const serverUnix = BigInt(Math.floor(new Date(sDate).getTime() / 1000));
+      const clientUnix = BigInt(Math.floor(Date.now() / 1000));
+      edgeClockSkew = serverUnix - clientUnix;
+    }
+  } catch (e) {}
+}
+syncEdgeClockSkew();
 
 const _SHA256_INITIAL = [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19];
 const _SHA256_STATE = [0xFD9FBEA2, 0x91243CE7, 0xBE499094, 0xCD2E1E0A, 0x6C006F49, 0x04BD35AB, 0xFEB0A7E4, 0x03EFFBD2];
@@ -450,7 +465,7 @@ function _cs64_digest(data, digest) {
   return [Number(swap_last ^ state), Number(swap_acc ^ acc)];
 }
 function generateSecMsGecV2(unix_timestamp = null) {
-  let ticks = BigInt(Math.floor(unix_timestamp || (Date.now() / 1000)));
+  let ticks = BigInt(Math.floor(unix_timestamp || (Date.now() / 1000))) + edgeClockSkew;
   ticks += WIN_EPOCH;
   ticks -= ticks % 300n;
   ticks *= S_TO_NS / 100n;
@@ -488,8 +503,7 @@ async function fetchBackgroundEdgeTTS(text, voice) {
       }, 5000);
 
       ws.onopen = () => {
-        const dateStr = new Date().toString();
-        const configMsg = `X-Timestamp:${dateStr}\r\nContent-Type:application/json;charset=utf-8\r\nPath:speech.config\r\n\r\n` +
+        const configMsg = `Content-Type:application/json;charset=utf-8\r\nPath:speech.config\r\n\r\n` +
           JSON.stringify({
             context: {
               synthesis: {
@@ -506,7 +520,7 @@ async function fetchBackgroundEdgeTTS(text, voice) {
         const voiceName = voice || 'vi-VN-NamMinhNeural';
         const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='vi-VN'>` +
           `<voice name='${voiceName}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${safeText}</prosody></voice></speak>`;
-        const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${dateStr}Z\r\nPath:ssml\r\n\r\n${ssml}`;
+        const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
         ws.send(ssmlMsg);
       };
 

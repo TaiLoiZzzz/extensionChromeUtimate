@@ -599,9 +599,21 @@
                 resolve(buffer);
               })
               .catch(err2 => {
-                console.error('[Dubber] Edge-TTS thất bại:', err2);
-                cue.synthesizing = false;
-                resolve(null);
+                console.warn('[Dubber] Edge-TTS thất bại 2 lần, chuyển dự phòng:', err2);
+                const gUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(viText)}`;
+                fetch(gUrl)
+                  .then(r => r.arrayBuffer())
+                  .then(decodeAudioData)
+                  .then(gBuf => {
+                    cue.synthesizing = false;
+                    cue.audioBuffer = gBuf;
+                    cue.silenceOffset = 0;
+                    resolve(gBuf);
+                  })
+                  .catch(() => {
+                    cue.synthesizing = false;
+                    resolve(null);
+                  });
               });
           });
       });
@@ -679,22 +691,40 @@
     showToast(cue.viText || cue.text, 'speaking');
 
     if (D.audioCtx && D.dubGainNode) {
-      const source = D.audioCtx.createBufferSource();
-      source.buffer = cue.audioBuffer;
-      // Giữ nguyên tốc độ chuẩn 1.0x (Tránh biến âm làm méo cao độ giọng Neural tự nhiên)
-      source.playbackRate.setValueAtTime(1.0, D.audioCtx.currentTime);
-      source.connect(D.dubGainNode);
+      try {
+        const source = D.audioCtx.createBufferSource();
+        source.buffer = cue.audioBuffer;
+        // Giữ nguyên tốc độ chuẩn 1.0x (Tránh biến âm làm méo cao độ giọng Neural tự nhiên)
+        source.playbackRate.setValueAtTime(1.0, D.audioCtx.currentTime);
+        source.connect(D.dubGainNode);
 
-      source.onended = () => {
-        D.isSpeaking = false;
-        D.currentSource = null;
-        updateOriginalAudioDucking();
-      };
+        source.onended = () => {
+          D.isSpeaking = false;
+          D.currentSource = null;
+          updateOriginalAudioDucking();
+        };
 
-      D.currentSource = source;
-      // Cắt bỏ chính xác khoảng lặng đầu file MP3 giúp tiếng phát ngay lập tức
-      const startOffset = cue.silenceOffset || 0;
-      source.start(0, startOffset);
+        D.currentSource = source;
+        const dur = cue.audioBuffer.duration || 1.0;
+        const startOffset = Math.max(0, Math.min(cue.silenceOffset || 0, Math.max(0, dur - 0.1)));
+        source.start(0, startOffset);
+      } catch (err) {
+        console.warn('[Dubber] Lỗi khởi tạo source audio:', err);
+        try {
+          const fallbackSource = D.audioCtx.createBufferSource();
+          fallbackSource.buffer = cue.audioBuffer;
+          fallbackSource.connect(D.dubGainNode);
+          fallbackSource.onended = () => {
+            D.isSpeaking = false;
+            D.currentSource = null;
+            updateOriginalAudioDucking();
+          };
+          D.currentSource = fallbackSource;
+          fallbackSource.start(0);
+        } catch (e2) {
+          D.isSpeaking = false;
+        }
+      }
     }
   }
 

@@ -457,6 +457,7 @@
       "requestHeaders": [
         { "header": "Origin", "operation": "set", "value": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold" },
         { "header": "User-Agent", "operation": "set", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0" },
+        { "header": "Cookie", "operation": "set", "value": "muid=5A6B7C8D9E0F1A2B3C4D5E6F7A8B9C0D;" },
         { "header": "Pragma", "operation": "set", "value": "no-cache" },
         { "header": "Cache-Control", "operation": "set", "value": "no-cache" }
       ]
