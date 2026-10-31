@@ -1,0 +1,104 @@
+/* ====================================================
+   UltraBlock Pro v2 - CSS Blocker (document_start)
+   Chặn bằng CSS trước khi JS chạy = nhanh nhất
+   ==================================================== */
+
+/* === Google Ads === */
+ins.adsbygoogle,[id^="google_ads"],[id^="div-gpt-ad"],
+[class*="google-ad"],[data-ad-client],[data-adsbygoogle-status] {
+  display:none!important;
+}
+
+/* === Generic Ads === */
+[class*="ad-banner"],[class*="ad-container"],[class*="ad-wrapper"],
+[class*="ad-slot"],[class*="ad-unit"],[class*="adBanner"],
+[class*="adContainer"],[class*="adWrapper"],[id*="ad-banner"],
+[id*="ad-container"],[id*="ad-wrapper"],[id*="ad-slot"] {
+  display:none!important;
+}
+
+/* === Betting / Gambling === */
+iframe[src*="vsbet"],iframe[src*="colascore"],
+a[href*="vsbet"],a[href*="colascore"],
+img[src*="vsbet"],img[src*="colascore"],
+a[href*="fb88"],a[href*="w88"],a[href*="m88"],
+a[href*="fun88"],a[href*="jun88"],a[href*="shbet"],a[href*="hi88"],
+a[href*="1xbet"],a[href*="bk8"],a[href*="bet365"] {
+  display:none!important;
+}
+
+/* === Popups === */
+[class*="popup-ad"],[class*="ad-popup"],[class*="overlay-ad"],
+[class*="ad-overlay"],[id*="popup-ad"],[id*="ad-popup"] {
+  display:none!important;
+}
+
+/* === Native / Sponsored === */
+[class*="taboola"],[class*="outbrain"],[class*="revcontent"],
+[class*="mgid"],[id*="taboola"],[id*="outbrain"],
+[data-sponsored],[class*="sponsored"],[class*="sponsor-"] {
+  display:none!important;
+}
+
+/* === iFrame Ad Networks === */
+iframe[src*="doubleclick"],iframe[src*="googlesyndication"],
+iframe[src*="advertising"],iframe[src*="adnxs"],
+iframe[src*="amazon-adsystem"],iframe[src*="moatads"],
+iframe[src*="exoclick"],iframe[src*="propellerads"],
+iframe[src*="trafficjunky"],iframe[src*="popads"],
+iframe[src*="popcash"],iframe[src*="exoclick"] {
+  display:none!important;
+}
+
+/* === Social Widgets (heavy) === */
+iframe[src*="facebook.com/plugins"],
+iframe[src*="platform.twitter.com"],
+iframe[src*="tiktok.com/embed"],
+.fb-like,.fb-share-button,.fb-comments,
+[class*="twitter-tweet"],[class*="twitter-share"] {
+  display:none!important;
+}
+
+/* === Cookie Banners === */
+#onetrust-banner-sdk,#cookiebanner,.cookie-law-info-bar,
+[id*="cookie-banner"],[id*="cookie-notice"],[id*="cookie-consent"],
+[id*="gdpr"],[class*="cookie-banner"],[class*="cookie-notice"],
+[class*="cookie-bar"],[class*="cookie-consent"],[class*="gdpr-banner"],
+[class*="cc-banner"] {
+  display:none!important;
+}
+
+/* === Adblock Warnings === */
+[class*="adblock-warning"],[class*="adblock-notice"],
+[class*="ad-block-message"],[id*="adblock-warning"],
+[id*="adblock-notice"],[class*="ab-message"],[id*="ab-message"] {
+  display:none!important;
+}
+
+/* === YouTube Ads === */
+#player-ads,#masthead-ad,.ytp-ad-overlay-container,
+.ytp-ad-text-overlay,.ytp-ad-image-overlay,
+ytd-ad-slot-renderer,ytd-in-feed-ad-layout-renderer,
+ytd-banner-promo-renderer,ytd-statement-banner-renderer,
+ytd-promoted-video-renderer,ytd-promoted-sparkles-web-renderer,
+ytd-merch-shelf-renderer,ytd-mealbar-promo-renderer,
+ytd-primetime-promo-renderer,ytd-search-pyv-renderer,
+.iv-branding,#clarify-box,ytd-companion-slot-renderer {
+  display:none!important;
+}
+
+/* === Performance: GPU accelerate scroll === */
+html {
+  scroll-behavior: smooth;
+}
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* === Reduce motion for non-essential animations === */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
