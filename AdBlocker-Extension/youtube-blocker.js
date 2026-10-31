@@ -115,7 +115,7 @@
       ytd-primetime-promo-renderer, ytd-companion-slot-renderer,
       ytd-action-companion-ad-renderer, ytd-display-ad-renderer,
       .ytp-ad-overlay-container, .ytp-ad-text-overlay,
-      .ytp-ad-image-overlay, .video-ads.ytp-ad-module {
+      .ytp-ad-image-overlay {
         display: none !important;
       }
     `;
@@ -186,6 +186,10 @@
         if (video.playbackRate !== spd && !document.querySelector('.ad-showing')) {
           video.playbackRate = spd;
         }
+      }
+      // Khôi phục phát video nếu bị dừng màn hình đen
+      if (video.paused && !video.ended && !document.querySelector('.ad-showing') && video.readyState >= 2) {
+        video.play().catch(() => {});
       }
     }
   }

@@ -280,20 +280,21 @@
   // ====================================================
   // PHẦN BẢO VỆ GỐC: XÓA QUẢNG CÁO TỪ RESPONSE
   // ====================================================
+  // PHẦN CHẶN QUẢNG CÁO TẬN GỐC (ZERO BLACK SCREEN / ZERO LAG)
+  // ====================================================
   function cleanAdData(obj) {
     if (!obj || typeof obj !== 'object') return obj;
     try {
-      if (obj.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
-        sendCaptionsToIsolatedWorld(obj.captions.playerCaptionsTracklistRenderer.captionTracks);
-      }
       if (obj.adPlacements) delete obj.adPlacements;
       if (obj.playerAds) delete obj.playerAds;
       if (obj.adSlots) delete obj.adSlots;
+      if (obj.adBreakHeartbeatParams) delete obj.adBreakHeartbeatParams;
       if (obj.auxiliaryUi && obj.auxiliaryUi.messageRenderers) delete obj.auxiliaryUi;
     } catch (e) {}
     return obj;
   }
 
+  // 1. Chặn ngay từ ytInitialPlayerResponse trước khi player khởi tạo
   if (window.ytInitialPlayerResponse) {
     cleanAdData(window.ytInitialPlayerResponse);
   } else {
@@ -305,28 +306,22 @@
     });
   }
 
+  // 2. Chặn trong Fetch API khi YouTube tải video metadata
   const origFetch = window.fetch;
   window.fetch = async function (resource, init) {
-    const response = await origFetch.apply(this, arguments);
     const url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
 
-    if (url.includes('/api/timedtext')) {
-      try {
-        const clone = response.clone();
-        const text = await clone.text();
-        if (text && text.length > 20) {
-          window.postMessage({ type: 'UB_CAPTIONS_FETCHED_LIVE', data: text, url }, '*');
-        }
-      } catch (err) {}
+    // Chặn các endpoint tracking quảng cáo gây delay
+    if (url.includes('/api/stats/ads') || url.includes('/pagead/') || url.includes('/ptracking')) {
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
+
+    const response = await origFetch.apply(this, arguments);
 
     if (url.includes('/youtubei/v1/player')) {
       try {
         const clone = response.clone();
         const data = await clone.json();
-        if (data && data.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
-          sendCaptionsToIsolatedWorld(data.captions.playerCaptionsTracklistRenderer.captionTracks);
-        }
         if (data && (data.adPlacements || data.playerAds || data.adSlots)) {
           cleanAdData(data);
           return new Response(JSON.stringify(data), {
@@ -340,36 +335,95 @@
     return response;
   };
 
+  // 3. Chặn trong XMLHttpRequest
+  const origOpen = XMLHttpRequest.prototype.open;
+  const origSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    this._ub_url = typeof url === 'string' ? url : '';
+    return origOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.send = function () {
+    if (this._ub_url && (this._ub_url.includes('/api/stats/ads') || this._ub_url.includes('/pagead/'))) {
+      try { this.abort(); return; } catch (e) {}
+    }
+    if (this._ub_url && this._ub_url.includes('/youtubei/v1/player')) {
+      this.addEventListener('readystatechange', () => {
+        if (this.readyState === 4 && this.status === 200) {
+          try {
+            const data = JSON.parse(this.responseText);
+            if (data && (data.adPlacements || data.playerAds || data.adSlots)) {
+              cleanAdData(data);
+              Object.defineProperty(this, 'responseText', { value: JSON.stringify(data) });
+              Object.defineProperty(this, 'response', { value: JSON.stringify(data) });
+            }
+          } catch (e) {}
+        }
+      });
+    }
+    return origSend.apply(this, arguments);
+  };
+
+  // 4. Chặn trong JSON.parse
   const originalJSONParse = JSON.parse;
   JSON.parse = function () {
     const data = originalJSONParse.apply(this, arguments);
     if (data && typeof data === 'object') {
-      if (data.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
-        sendCaptionsToIsolatedWorld(data.captions.playerCaptionsTracklistRenderer.captionTracks);
-      }
       if (data.adPlacements || data.playerAds || data.adSlots) cleanAdData(data);
     }
     return data;
   };
 
-  function forceSkipAd() {
-    const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
-    const adElement = document.querySelector('.ad-showing, .ad-interrupting');
+  // 5. Xử lý êm ái nếu quảng cáo lọt lưới (KHÔNG BAO GIỜ BỊ MÀN HÌNH ĐEN)
+  let wasAdShowing = false;
+  let userMutedState = false;
+
+  function handleVideoAdsGracefully() {
+    const moviePlayer = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    const adShowing = moviePlayer && (moviePlayer.classList.contains('ad-showing') || moviePlayer.classList.contains('ad-interrupting'));
     const video = document.querySelector('video');
 
-    if (adElement && video) {
+    if (adShowing && video) {
+      if (!wasAdShowing) {
+        wasAdShowing = true;
+        userMutedState = video.muted;
+      }
+      // Tắt tiếng quảng cáo
       video.muted = true;
-      if (player && typeof player.skipAd === 'function') player.skipAd();
+
+      // Dùng lệnh native skip nếu có
+      if (moviePlayer && typeof moviePlayer.skipAd === 'function') {
+        try { moviePlayer.skipAd(); } catch (e) {}
+      }
+
+      // Bấm nút skip nếu đã hiện
       const skipButtons = document.querySelectorAll(
         '.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, [class*="skip-ad"], .ytp-ad-overlay-close-button'
       );
-      skipButtons.forEach(btn => btn && btn.click());
-      if (isFinite(video.duration) && video.duration > 0) {
-        video.currentTime = video.duration;
-        video.dispatchEvent(new Event('ended'));
+      skipButtons.forEach(btn => {
+        try { btn.click(); } catch(e) {}
+      });
+
+      // Tăng tốc 16x để quảng cáo trôi qua trong tích tắc mà KHÔNG làm hỏng pipeline
+      video.playbackRate = 16;
+      if (video.paused) {
+        video.play().catch(() => {});
+      }
+    } else {
+      // Khi quảng cáo kết thúc hoặc phát video bình thường
+      if (wasAdShowing) {
+        wasAdShowing = false;
+        if (video) {
+          video.muted = userMutedState;
+          video.playbackRate = 1.0;
+          // Tự động phát tiếp nếu YouTube bị đơ ở khung hình đen!
+          if (video.paused && !video.ended) {
+            video.play().catch(() => {});
+          }
+        }
       }
     }
   }
-  setInterval(forceSkipAd, 50);
+
+  setInterval(handleVideoAdsGracefully, 100);
 
 })();
