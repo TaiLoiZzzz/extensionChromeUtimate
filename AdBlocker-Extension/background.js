@@ -624,48 +624,90 @@ async function synthesizeTTSWithFallback(text, voice) {
   }
 }
 
-// ─── TẢI PHỤ ĐỀ YOUTUBE BẰNG INNERTUBE API (CHUẨN XÁC 100%, KHÔNG CẦN COOKIE) ───
+// ─── TẢI PHỤ ĐỀ YOUTUBE BẰNG INNERTUBE API (ĐA NỀN TẢNG: IOS, WEB, ANDROID) ───
 async function fetchInnerTubeSubtitles(videoId) {
   const url = 'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-      'X-YouTube-Client-Name': '5',
-      'X-YouTube-Client-Version': '20.10.4',
-      'Origin': 'https://www.youtube.com'
+  const tryClients = [
+    {
+      clientName: 'IOS',
+      clientVersion: '20.10.4',
+      deviceMake: 'Apple',
+      deviceModel: 'iPhone16,2',
+      platform: 'MOBILE',
+      osName: 'iOS',
+      osVersion: '18.3.2.22D82',
+      userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      clientNumber: '5'
     },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: 'IOS',
-          clientVersion: '20.10.4',
-          hl: 'en',
-          gl: 'US',
-          deviceMake: 'Apple',
-          deviceModel: 'iPhone16,2',
-          platform: 'MOBILE',
-          osName: 'iOS',
-          osVersion: '18.3.2.22D82'
+    {
+      clientName: 'WEB',
+      clientVersion: '2.20241028.01.00',
+      platform: 'DESKTOP',
+      osName: 'Windows',
+      osVersion: '10.0',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      clientNumber: '1'
+    },
+    {
+      clientName: 'ANDROID',
+      clientVersion: '19.44.38',
+      deviceMake: 'Google',
+      deviceModel: 'Pixel 8',
+      platform: 'MOBILE',
+      osName: 'Android',
+      osVersion: '14',
+      userAgent: 'com.google.android.youtube/19.44.38 (Linux; U; Android 14; en_US; Pixel 8)',
+      clientNumber: '3'
+    }
+  ];
+
+  for (const c of tryClients) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': c.userAgent,
+          'X-YouTube-Client-Name': c.clientNumber,
+          'X-YouTube-Client-Version': c.clientVersion,
+          'Origin': 'https://www.youtube.com'
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: c.clientName,
+              clientVersion: c.clientVersion,
+              hl: 'en',
+              gl: 'US',
+              ...(c.deviceMake ? { deviceMake: c.deviceMake, deviceModel: c.deviceModel } : {}),
+              platform: c.platform,
+              osName: c.osName,
+              osVersion: c.osVersion
+            }
+          },
+          videoId: videoId
+        })
+      });
+      const data = await res.json();
+      const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+      if (tracks.length > 0) {
+        // Ưu tiên: Tiếng Việt -> Tiếng Anh manual -> Tiếng Anh auto -> Track bất kỳ
+        const best = tracks.find(t => t.languageCode === 'vi')
+          || tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
+          || tracks.find(t => t.languageCode === 'en')
+          || tracks[0];
+
+        const subRes = await fetch(best.baseUrl);
+        const xml = await subRes.text();
+        if (xml && xml.length > 20) {
+          return { xml, track: best };
         }
-      },
-      videoId: videoId
-    })
-  });
-  const data = await res.json();
-  const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-  if (!tracks.length) throw new Error('Không tìm thấy track phụ đề trong InnerTube');
-
-  // Ưu tiên: Tiếng Việt -> Tiếng Anh manual -> Tiếng Anh auto -> Track đầu tiên
-  const best = tracks.find(t => t.languageCode === 'vi')
-    || tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
-    || tracks.find(t => t.languageCode === 'en')
-    || tracks[0];
-
-  const subRes = await fetch(best.baseUrl);
-  const xml = await subRes.text();
-  return { xml, track: best };
+      }
+    } catch (e) {
+      // Thử client tiếp theo
+    }
+  }
+  throw new Error('Không tìm thấy track phụ đề trong InnerTube');
 }
 
 // ─── TẢI PHỤ ĐỀ YOUTUBE TIMEDTEXT XUYÊN DOMAIN ───

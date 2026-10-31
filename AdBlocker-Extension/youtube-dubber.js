@@ -15,6 +15,8 @@
     voice: 'vi-VN-NamMinhNeural', // Mặc định Nam Minh Neural trầm ấm, chuẩn tự nhiên
     duckLevel: 0.15,
     dubVolume: 1.0,
+    syncOffset: -0.35, // Bù trừ độ trễ nhận diện YouTube ASR (~0.35s)
+    isPreparing: false, // Trạng thái đang quét và tính toán đồng bộ trước khi phát
     cues: [],
     captionTracks: [],
     currentVideoId: '',
@@ -53,7 +55,7 @@
   function syncSettings() {
     chrome.storage.local.get([
       'dubbingEnabled', 'dubbingProvider', 'geminiApiKey',
-      'dubbingVoice', 'dubbingDuckLevel', 'dubbingVolume'
+      'dubbingVoice', 'dubbingDuckLevel', 'dubbingVolume', 'dubbingSyncOffset'
     ], data => {
       if (data.dubbingEnabled !== undefined) D.enabled = data.dubbingEnabled;
       if (data.dubbingProvider) D.provider = data.dubbingProvider;
@@ -61,6 +63,9 @@
       if (data.dubbingVoice) D.voice = data.dubbingVoice;
       if (data.dubbingDuckLevel !== undefined) {
         D.duckLevel = Math.max(0, Math.min(1.0, parseFloat(data.dubbingDuckLevel)));
+      }
+      if (data.dubbingSyncOffset !== undefined) {
+        D.syncOffset = parseFloat(data.dubbingSyncOffset);
       }
       if (data.dubbingVolume !== undefined) {
         D.dubVolume = Math.max(0, Math.min(2.0, parseFloat(data.dubbingVolume)));
@@ -206,14 +211,14 @@
         const currentDur = frag.end - batchStart;
 
         // Tiêu chí nhận diện kết thúc 1 câu / vế hoàn chỉnh:
-        // 1. Dấu câu kết thúc rõ ràng (chấm, hỏi, than, ba chấm)
+        // 1. Dấu câu kết thúc rõ ràng (. ? ! …)
         const endsWithPunct = /[.?!…]$/.test(batchText);
-        // 2. Người nói dừng lại lấy hơi (khoảng lặng gap >= 0.45s)
-        const hasNaturalPause = gap >= 0.45;
-        // 3. Đã nói đủ dài (>= 3.2s) và gặp dấu phẩy, chấm phẩy, gạch ngang
-        const hasClauseBreak = currentDur >= 3.2 && /[,;—–-]$/.test(batchText);
-        // 4. Độ dài tối ưu của 1 câu lồng tiếng đạt ngưỡng (currentDur >= 5.5s)
-        const isIdealMax = currentDur >= 5.5;
+        // 2. Người nói dừng lại lấy hơi (khoảng lặng gap >= 0.35s)
+        const hasNaturalPause = gap >= 0.35;
+        // 3. Đã nói đủ dài (>= 2.8s) và gặp dấu phẩy, chấm phẩy, gạch ngang hoặc gap >= 0.20s
+        const hasClauseBreak = currentDur >= 2.8 && (/[,;—–-]$/.test(batchText) || gap >= 0.20);
+        // 4. Độ dài tối ưu của 1 câu lồng tiếng đạt ngưỡng (currentDur >= 4.8s)
+        const isIdealMax = currentDur >= 4.8;
 
         if (endsWithPunct || hasNaturalPause || hasClauseBreak || isIdealMax) {
           const finalDuration = Math.max(1.0, batchEnd - batchStart);
@@ -225,6 +230,8 @@
             text: batchText,
             viText: '',
             audioBuffer: null,
+            silenceOffset: 0,
+            calculatedRate: 1.0,
             translating: false,
             synthesizing: false
           });
@@ -253,6 +260,8 @@
         text: batchText,
         viText: '',
         audioBuffer: null,
+        silenceOffset: 0,
+        calculatedRate: 1.0,
         translating: false,
         synthesizing: false
       });
@@ -341,12 +350,11 @@
   // ─── TẢI PHỤ ĐỀ YOUTUBE TIMEDTEXT API (ĐA TẦNG DÒ TÌM SIÊU CẤP) ───
   async function loadSubtitlesForCurrentVideo() {
     const videoId = getVideoId();
-    if (!videoId) return;
+    if (!videoId) return false;
     D.currentVideoId = videoId;
     D.cues = [];
-    showToast('Đang kết nối phụ đề AI...', 'loading');
 
-    // TẦNG 1: TRUY VẤN QUA INNERTUBE API (SIÊU TỐC ~0.5s, 100% CHÍNH XÁC)
+    // TẦNG 1: TRUY VẤN QUA INNERTUBE API (ĐA NỀN TẢNG: IOS, WEB, ANDROID)
     const innerTubeSuccess = await new Promise((resolve) => {
       chrome.runtime.sendMessage({ type: 'DUB_FETCH_INNERTUBE_SUBTITLES', videoId }, resp => {
         if (resp && resp.ok && resp.xml) {
@@ -357,8 +365,6 @@
               parsedCues.forEach(c => { c.viText = c.text; });
             }
             D.cues = parsedCues;
-            const v = document.querySelector('video');
-            preloadInitialBuffer(v);
             resolve(true);
             return;
           }
@@ -367,7 +373,7 @@
       });
     });
 
-    if (innerTubeSuccess) return;
+    if (innerTubeSuccess) return true;
 
     // TẦNG 2: NẾU TẦNG 1 CHƯA CÓ, DÒ TRACKS TRỰC TIẾP TỪ PLAYER RESPONSE
     window.postMessage({ type: 'UB_FORCE_LOAD_CAPTIONS' }, '*');
@@ -377,7 +383,7 @@
     for (let attempt = 1; attempt <= 6; attempt++) {
       if (tracks && tracks.length > 0) break;
       window.postMessage({ type: 'UB_GET_CAPTIONS' }, '*');
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 250));
       tracks = D.captionTracks || [];
     }
 
@@ -394,33 +400,26 @@
         base.replace(/&fmt=[^&]+/, '')
       ];
 
-      let parsedCues = [];
       for (const url of urlsToTry) {
         let raw = await fetchSubtitlesFromMainWorld(url);
         if (!raw) raw = await fetchSubtitlesFromBackground(url);
         if (raw) {
-          parsedCues = parseAnySubtitles(raw);
-          if (parsedCues.length > 0) {
+          const parsedCues = parseAnySubtitles(raw);
+          if (parsedCues && parsedCues.length > 0) {
+            applyTimingToCues(parsedCues);
             if (isAlreadyVietnamese) {
               parsedCues.forEach(c => { c.viText = c.text; });
             }
-            break;
+            D.cues = parsedCues;
+            return true;
           }
         }
       }
-
-      if (parsedCues && parsedCues.length > 0) {
-        applyTimingToCues(parsedCues);
-        D.cues = parsedCues;
-        const v = document.querySelector('video');
-        preloadInitialBuffer(v);
-        return;
-      }
     }
 
-    // TẦNG 3: BẮT TRỰC TIẾP TỪ PHỤ ĐỀ ĐANG CHẠY TRÊN MÀN HÌNH (DOM OBSERVER)
+    // TẦNG 3: BẮT TỪ PHỤ ĐỀ TRÊN MÀN HÌNH (DOM OBSERVER)
     observeLiveDomCaptions();
-    showToast('Đang đọc trực tiếp phụ đề trên màn hình', 'loading');
+    return Boolean(D.cues && D.cues.length > 0);
   }
 
   // ─── THUẬT TOÁN RÚT GỌN TỪ ĐỆM TIẾNG VIỆT (TEXT CONDENSATION) ───
@@ -518,7 +517,7 @@
   }
 
 
-  // ─── ĐẢM BẢO CÂU ĐƯỢC DỊCH VÀ TẠO GIỌNG ĐỌC HOÀN CHỈNH TRƯỚC KHI PHÁT ───
+  // ─── ĐẢM BẢO CÂU ĐƯỢC DỊCH, TỔNG HỢP VÀ TÍNH TOÁN ĐỒNG BỘ ───
   function ensureCueReady(cue) {
     if (!cue) return Promise.resolve(null);
     if (cue.audioBuffer) return Promise.resolve(cue.audioBuffer);
@@ -534,7 +533,7 @@
                 clearInterval(check);
                 r(cue.viText || '');
               }
-            }, 50);
+            }, 40);
             setTimeout(() => { clearInterval(check); r(cue.viText || ''); }, 3500);
           });
         }
@@ -544,13 +543,15 @@
           chrome.runtime.sendMessage({
             type: 'DUB_TRANSLATE',
             text: cue.text,
-            targetDuration: cue.effectiveTarget,
+            targetDuration: cue.effectiveTarget || cue.duration,
             provider: D.provider,
             apiKey: D.geminiApiKey
           }, resp => {
             cue.translating = false;
             if (resp && resp.ok && resp.result) {
-              cue.viText = condenseVietnameseText(resp.result, cue.maxSyllables);
+              cue.viText = condenseVietnameseText(resp.result, cue.maxSyllables || 20);
+            } else {
+              cue.viText = cue.text;
             }
             r(cue.viText || '');
           });
@@ -573,29 +574,51 @@
               clearInterval(check);
               resolve(cue.audioBuffer || null);
             }
-          }, 50);
+          }, 40);
           setTimeout(() => { clearInterval(check); resolve(cue.audioBuffer || null); }, 3500);
           return;
         }
 
         cue.synthesizing = true;
+        const finalizeBuffer = (buffer) => {
+          cue.synthesizing = false;
+          cue.audioBuffer = buffer;
+          cue.silenceOffset = detectLeadingSilence(buffer);
+
+          // 3. TÍNH TOÁN TỶ LỆ TỐC ĐỘ ĐỒNG BỘ (ZERO-DRIFT DURATION MATCHING)
+          const usableAudioDur = Math.max(0.1, buffer.duration - (cue.silenceOffset || 0));
+          const availableVideoDur = cue.effectiveTarget || cue.duration;
+          let optimalRate = 1.0;
+          if (usableAudioDur > availableVideoDur) {
+            // Giọng nói tiếng Việt dài hơn thời lượng video:
+            // Tự động co tốc độ mượt mà (tối đa 1.25x) để kết thúc chính xác đúng lúc người nói dừng,
+            // không đè lên câu kế tiếp và không trôi chậm hơn video!
+            optimalRate = Math.min(1.25, Math.max(1.0, usableAudioDur / (availableVideoDur * 0.95)));
+          }
+          cue.calculatedRate = optimalRate;
+          resolve(buffer);
+        };
+
         fetchEdgeTTSAudio(viText, D.voice)
           .then(decodeAudioData)
           .then(buffer => {
-            cue.synthesizing = false;
-            cue.audioBuffer = buffer;
-            cue.silenceOffset = detectLeadingSilence(buffer);
-            resolve(buffer);
+            if (buffer) {
+              finalizeBuffer(buffer);
+            } else {
+              throw new Error('decodeAudioData returned null');
+            }
           })
           .catch(err => {
             console.warn('[Dubber] Thử lại tổng hợp âm thanh...', err);
             fetchEdgeTTSAudio(viText, D.voice)
               .then(decodeAudioData)
               .then(buffer => {
-                cue.synthesizing = false;
-                cue.audioBuffer = buffer;
-                cue.silenceOffset = detectLeadingSilence(buffer);
-                resolve(buffer);
+                if (buffer) {
+                  finalizeBuffer(buffer);
+                } else {
+                  cue.synthesizing = false;
+                  resolve(null);
+                }
               })
               .catch(err2 => {
                 console.error('[Dubber] Tổng hợp âm thanh thất bại:', err2);
@@ -607,38 +630,76 @@
     });
   }
 
-  // ─── NẠP TRƯỚC BẢN DỊCH VÀ GIỌNG ĐỌC KHI MỚI VÀO (TRÁNH BỊ HỤT CÂU & NGẮT QUÃNG) ───
+  // ─── CHUẨN BỊ, QUÉT VÀ TÍNH TOÁN ĐỒNG BỘ KĨ LƯỠNG TRƯỚC KHI VIDEO CHẠY ───
   let isBufferingInitial = false;
 
-  async function preloadInitialBuffer(video) {
-    if (!D.cues || D.cues.length === 0 || isBufferingInitial) return;
+  async function prepareAndStartDubbing(video) {
+    if (!D.enabled) return;
+    if (isBufferingInitial) return;
     isBufferingInitial = true;
+    D.isPreparing = true;
 
-    const curTime = video ? video.currentTime : 0;
-    // Lấy 4 câu đầu tiên sắp nói tính từ thời điểm hiện tại
-    const initialBatch = D.cues.filter(c => c.end >= curTime && c.start <= curTime + 22).slice(0, 4);
-
-    if (initialBatch.length > 0) {
-      showToast(`Đang sẵn sàng thuyết minh (${initialBatch.length} câu)...`, 'loading');
-      // Nạp song song trong nền, TUYỆT ĐỐI không làm dừng video của người dùng
-      initialBatch.forEach(c => ensureCueReady(c));
-      setTimeout(() => {
-        hideToast();
-      }, 1500);
+    // Tạm dừng video để chuẩn bị và quét đồng bộ kĩ lưỡng
+    if (video && !video.paused) {
+      try { video.pause(); } catch(e) {}
     }
 
+    showToast('🔍 Đang quét toàn bộ phụ đề và tính toán đồng bộ...', 'loading');
+
+    // 1. Quét toàn bộ phụ đề nếu chưa nạp
+    if (!D.cues || D.cues.length === 0) {
+      const ok = await loadSubtitlesForCurrentVideo();
+      if (!ok || !D.cues || D.cues.length === 0) {
+        showToast('⚠️ Video này không có phụ đề để thuyết minh', 'error');
+        D.isPreparing = false;
+        isBufferingInitial = false;
+        if (video) {
+          try { video.play(); } catch(e) {}
+        }
+        return;
+      }
+    }
+
+    const curTime = video ? video.currentTime : 0;
+    // Chọn lô câu đầu tiên cần thuyết minh (3-4 câu đầu tính từ thời điểm hiện tại)
+    const initialBatch = D.cues.filter(c => c.end >= curTime && c.start <= curTime + 20).slice(0, 4);
+
+    if (initialBatch.length > 0) {
+      for (let i = 0; i < initialBatch.length; i++) {
+        const c = initialBatch[i];
+        showToast(`⚡ Đang nạp & tối ưu đồng bộ (${i + 1}/${initialBatch.length} câu)...`, 'loading');
+        await ensureCueReady(c);
+      }
+    }
+
+    // Đã kiểm tra xong đầy đủ!
+    D.isPreparing = false;
     isBufferingInitial = false;
 
-    // Tiếp tục kích hoạt nạp trước nền cho 28 giây tiếp theo
-    if (video) processQueue(video.currentTime);
+    showToast(`✅ Đã đồng bộ hoàn hảo (${D.cues.length} câu)! Bắt đầu phát...`, 'loading');
+    setTimeout(() => {
+      hideToast();
+    }, 1200);
+
+    // Kích hoạt phát video và bắt đầu thuyết minh
+    if (video) {
+      initAudioCtx();
+      try {
+        await video.play();
+      } catch (err) {
+        console.warn('[Dubber] Autoplay blocked, waiting for user click:', err);
+      }
+      startClockLoop(video);
+      processQueue(video.currentTime);
+    }
   }
 
-  // ─── QUẢN LÝ HÀNG ĐỢI NẠP TRƯỚC LIÊN TỤC 28 GIÂY ───
+  // ─── QUẢN LÝ HÀNG ĐỢI NẠP TRƯỚC LIÊN TỤC 25 GIÂY ───
   function processQueue(currentTime) {
-    if (!D.enabled || !D.cues || D.cues.length === 0) return;
+    if (!D.enabled || !D.cues || D.cues.length === 0 || D.isPreparing) return;
 
-    // Lọc các câu sắp nói trong khoảng từ currentTime đến currentTime + 28s
-    const upcomingCues = D.cues.filter(c => c.start >= currentTime - 1 && c.start <= currentTime + 28);
+    // Lọc các câu sắp nói trong khoảng từ currentTime đến currentTime + 25s
+    const upcomingCues = D.cues.filter(c => c.start >= currentTime - 1 && c.start <= currentTime + 25);
 
     for (const cue of upcomingCues) {
       if (!cue.audioBuffer && !cue.synthesizing && !cue.translating) {
@@ -647,7 +708,7 @@
     }
   }
 
-  // ─── LỚP 3 & 4: PHÁT ÂM THANH ĐỒNG BỘ THỜI GIAN THỰC + DUCKING NHẠC NỀN ───
+  // ─── PHÁT ÂM THANH ĐỒNG BỘ THỜI GIAN THỰC + DUCKING NHẠC NỀN ───
   function playCueAudio(cue) {
     if (!cue || !cue.audioBuffer) {
       D.isSpeaking = false;
@@ -665,8 +726,9 @@
       try {
         const source = D.audioCtx.createBufferSource();
         source.buffer = cue.audioBuffer;
-        // Giữ nguyên tốc độ chuẩn 1.0x (Tránh biến âm làm méo cao độ giọng Neural tự nhiên)
-        source.playbackRate.setValueAtTime(1.0, D.audioCtx.currentTime);
+        // Áp dụng tốc độ đồng bộ chính xác đã tính toán trước (chống trôi thời gian)
+        const rate = cue.calculatedRate || 1.0;
+        source.playbackRate.setValueAtTime(rate, D.audioCtx.currentTime);
         source.connect(D.dubGainNode);
 
         source.onended = () => {
@@ -681,20 +743,7 @@
         source.start(0, startOffset);
       } catch (err) {
         console.warn('[Dubber] Lỗi khởi tạo source audio:', err);
-        try {
-          const fallbackSource = D.audioCtx.createBufferSource();
-          fallbackSource.buffer = cue.audioBuffer;
-          fallbackSource.connect(D.dubGainNode);
-          fallbackSource.onended = () => {
-            D.isSpeaking = false;
-            D.currentSource = null;
-            updateOriginalAudioDucking();
-          };
-          D.currentSource = fallbackSource;
-          fallbackSource.start(0);
-        } catch (e2) {
-          D.isSpeaking = false;
-        }
+        D.isSpeaking = false;
       }
     }
   }
@@ -721,35 +770,53 @@
   let syncRafId = null;
 
   function checkAndPlayCurrentCue(video) {
-    if (!D.enabled || !D.cues || D.cues.length === 0 || !video) return;
+    if (!D.enabled || !D.cues || D.cues.length === 0 || !video || D.isPreparing) return;
     const t = video.currentTime;
 
-    // Nạp trước dữ liệu 28 giây tiếp theo
+    // Nạp trước dữ liệu nền 25 giây tiếp theo
     processQueue(t);
 
-    // Nếu đang nói câu hiện tại, KHÔNG ĐƯỢC ngắt giữa chừng!
-    if (D.isSpeaking) return;
-
-    // Bù trừ độ trễ: Kích hoạt trước 0.15s để khớp 100% khẩu hình người nói gốc
-    const syncLeadTime = 0.15;
+    // Bù trừ độ trễ ASR YouTube + Offset điều chỉnh của người dùng
+    const syncLeadTime = 0.35 + (D.syncOffset || 0);
     const syncT = t + syncLeadTime;
 
     // Tìm câu tương ứng với thời điểm hiện tại
-    const cueIndex = D.cues.findIndex(c => syncT >= c.start && t < (c.end + (c.gap || 0.4)));
+    const cueIndex = D.cues.findIndex(c => syncT >= c.start && t < (c.end + (c.gap || 0.35)));
 
     if (cueIndex !== -1 && cueIndex !== D.activeCueIndex) {
-      D.activeCueIndex = cueIndex; // ĐÁNH DẤU NGAY LẬP TỨC để tránh gọi lặp lại trong vòng lặp RAF
       const cue = D.cues[cueIndex];
-      
-      if (cue.audioBuffer) {
-        playCueAudio(cue);
-      } else {
-        // Nếu câu này chưa nạp xong: ưu tiên nạp và chỉ phát khi có audioBuffer chuẩn Microsoft Neural
-        ensureCueReady(cue).then((buf) => {
-          if (buf && D.enabled && !D.isSpeaking && Math.abs(video.currentTime - cue.start) < (cue.duration + 2.5)) {
-            playCueAudio(cue);
+      D.activeCueIndex = cueIndex; // ĐÁNH DẤU NGAY LẬP TỨC để tránh gọi lặp lại trong vòng lặp RAF
+
+      const triggerPlayback = (targetCue) => {
+        if (targetCue.audioBuffer) {
+          playCueAudio(targetCue);
+        } else {
+          ensureCueReady(targetCue).then(buf => {
+            if (buf && D.enabled && !D.isPreparing && Math.abs(video.currentTime - targetCue.start) < (targetCue.duration + 2.0)) {
+              playCueAudio(targetCue);
+            }
+          });
+        }
+      };
+
+      // Chuyển tiếp mượt mà: nếu đang có câu trước, fade out nhẹ 40ms rồi phát câu mới đúng giờ
+      if (D.isSpeaking && D.dubGainNode && D.audioCtx) {
+        try {
+          D.dubGainNode.gain.cancelScheduledValues(D.audioCtx.currentTime);
+          D.dubGainNode.gain.setTargetAtTime(0.001, D.audioCtx.currentTime, 0.015);
+        } catch(e) {}
+        setTimeout(() => {
+          stopCurrentAudio();
+          if (D.dubGainNode && D.audioCtx) {
+            try {
+              D.dubGainNode.gain.cancelScheduledValues(D.audioCtx.currentTime);
+              D.dubGainNode.gain.setTargetAtTime(D.dubVolume, D.audioCtx.currentTime, 0.02);
+            } catch(e2) {}
           }
-        });
+          triggerPlayback(cue);
+        }, 40);
+      } else {
+        triggerPlayback(cue);
       }
     }
   }
@@ -786,24 +853,28 @@
     video.addEventListener('seeking', () => {
       stopCurrentAudio();
       D.activeCueIndex = -1;
-      if (D.enabled) {
-        preloadInitialBuffer(video);
+      if (D.enabled && !D.isPreparing) {
+        prepareAndStartDubbing(video);
       }
     });
 
     video.addEventListener('pause', () => {
-      stopClockLoop();
-      if (D.audioCtx && D.audioCtx.state === 'running') {
-        D.audioCtx.suspend().catch(() => {});
+      if (!D.isPreparing) {
+        stopClockLoop();
+        if (D.audioCtx && D.audioCtx.state === 'running') {
+          D.audioCtx.suspend().catch(() => {});
+        }
       }
     });
 
     video.addEventListener('play', () => {
       initAudioCtx();
-      startClockLoop(video);
+      if (!D.isPreparing) {
+        startClockLoop(video);
+      }
     });
 
-    if (!video.paused) {
+    if (!video.paused && !D.isPreparing) {
       startClockLoop(video);
     }
   }
@@ -818,7 +889,8 @@
         D.activeCueIndex = -1;
         stopCurrentAudio();
         if (D.enabled) {
-          loadSubtitlesForCurrentVideo();
+          const v = document.querySelector('video');
+          prepareAndStartDubbing(v);
         }
       }
     };
@@ -826,7 +898,7 @@
     window.addEventListener('yt-navigate-finish', checkChange);
     window.addEventListener('spfdone', checkChange);
     window.addEventListener('popstate', checkChange);
-    setInterval(checkChange, 1500);
+    setInterval(checkChange, 1200);
   }
 
   // ─── THEO DÕI PHỤ ĐỀ TRỰC TIẾP TRÊN MÀN HÌNH (DOM FALLBACK) ───
@@ -946,9 +1018,9 @@
         user-select: none !important;
       `;
       mixer.innerHTML = `
-        <div style="font-size:11px;font-weight:800;color:#00e676;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">🎚️ Chỉnh Âm Lượng Trực Tiếp</div>
+        <div style="font-size:11px;font-weight:800;color:#00e676;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">🎚️ Bảng Điều Khiển Âm Thanh</div>
         <div style="display:flex;justify-content:space-between;font-size:11px;color:#ddd;margin-bottom:2px;">
-          <span>🎙️ Giọng dịch:</span>
+          <span>🎙️ Giọng thuyết minh:</span>
           <span id="ub-mix-dub-lbl" style="color:#00e676;font-weight:700;">${Math.round(D.dubVolume * 100)}%</span>
         </div>
         <input type="range" id="ub-mix-dub-input" min="0" max="2.0" step="0.1" value="${D.dubVolume}" style="width:100%;height:4px;cursor:pointer;accent-color:#00e676;margin-bottom:8px;">
@@ -956,7 +1028,13 @@
           <span>🎬 Tiếng video gốc:</span>
           <span id="ub-mix-orig-lbl" style="color:#00e676;font-weight:700;">${Math.round(D.duckLevel * 100)}%</span>
         </div>
-        <input type="range" id="ub-mix-orig-input" min="0" max="1.0" step="0.05" value="${D.duckLevel}" style="width:100%;height:4px;cursor:pointer;accent-color:#00e676;">
+        <input type="range" id="ub-mix-orig-input" min="0" max="1.0" step="0.05" value="${D.duckLevel}" style="width:100%;height:4px;cursor:pointer;accent-color:#00e676;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#ddd;margin-bottom:2px;">
+          <span>⏱️ Căn chỉnh đồng bộ:</span>
+          <span id="ub-mix-sync-lbl" style="color:#00e676;font-weight:700;">${(D.syncOffset >= 0 ? '+' : '') + D.syncOffset.toFixed(2)}s</span>
+        </div>
+        <input type="range" id="ub-mix-sync-input" min="-0.8" max="0.4" step="0.05" value="${D.syncOffset}" style="width:100%;height:4px;cursor:pointer;accent-color:#00e676;">
+        <div style="font-size:9px;color:#888;margin-top:2px;">(Kéo trái: nói sớm hơn | Kéo phải: nói muộn hơn)</div>
       `;
 
       mixer.onclick = (e) => e.stopPropagation();
@@ -982,6 +1060,15 @@
         D.duckLevel = val;
         updateOriginalAudioDucking();
         chrome.storage.local.set({ dubbingDuckLevel: val });
+      };
+
+      const syncSlider = mixer.querySelector('#ub-mix-sync-input');
+      const syncLbl = mixer.querySelector('#ub-mix-sync-lbl');
+      syncSlider.oninput = (e) => {
+        const val = parseFloat(e.target.value);
+        syncLbl.textContent = (val >= 0 ? '+' : '') + val.toFixed(2) + 's';
+        D.syncOffset = val;
+        chrome.storage.local.set({ dubbingSyncOffset: val });
       };
 
       player.appendChild(mixer);
@@ -1131,6 +1218,12 @@
       origSlider.value = D.duckLevel;
       origLbl.textContent = Math.round(D.duckLevel * 100) + '%';
     }
+    const syncSlider = document.getElementById('ub-mix-sync-input');
+    const syncLbl = document.getElementById('ub-mix-sync-lbl');
+    if (syncSlider && syncLbl) {
+      syncSlider.value = D.syncOffset;
+      syncLbl.textContent = (D.syncOffset >= 0 ? '+' : '') + D.syncOffset.toFixed(2) + 's';
+    }
   }
 
   // ─── TOAST THÔNG BÁO VÀ PHỤ ĐỀ TIẾNG VIỆT NỔI TRÊN VIDEO ───
@@ -1200,12 +1293,8 @@
   function ensureDubbingRunning() {
     initAudioCtx();
     bindVideoEvents();
-    if (!D.cues || D.cues.length === 0) {
-      loadSubtitlesForCurrentVideo();
-    } else {
-      const v = document.querySelector('video');
-      preloadInitialBuffer(v);
-    }
+    const v = document.querySelector('video');
+    prepareAndStartDubbing(v);
   }
 
   // ─── KHỞI TẠO TIỆN ÍCH ───
