@@ -8,7 +8,6 @@
   let currentGainValue = 2.2; // Khuếch đại tối ưu chuẩn Studio (220%)
   let audioCtx = null;
   let preGainNode = null;
-  let duckingGainNode = null;
   let waveShaper = null;
   let bassFilter = null;
   let midFilter = null;
@@ -16,7 +15,6 @@
   let studioLimiter = null;
   let audioSource = null;
   let boundVideo = null;
-  let cachedCaptionTracks = [];
 
   // ─── 1. THUẬT TOÁN TUBE SATURATION / SOFT CLIPPER (CHỐNG RÉO MÉO RÁC TAI) ───
   // Mô phỏng amply đèn điện tử (Analog Warmth): Uốn cong đỉnh sóng thay vì cắt phẳng
@@ -89,20 +87,15 @@
       studioLimiter.attack.setValueAtTime(0.002, audioCtx.currentTime);   // 2ms phản ứng cực nhạy
       studioLimiter.release.setValueAtTime(0.12, audioCtx.currentTime);   // 120ms nhả âm mượt mà, không bị phập phồng
 
-      // --- DẢI 0: DUCKING GAIN (ĐẶT Ở CUỐI CHUỖI ĐỂ KIỂM SOÁT TRIỆT ĐỂ ÂM LƯỢNG) ---
-      duckingGainNode = audioCtx.createGain();
-      duckingGainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
-
       // NỐI CHUỖI XỬ LÝ ÂM THANH CHUYÊN NGHIỆP:
-      // Video Source -> 3-Band Studio EQ -> Pre-Gain -> Tube Saturator -> Studio Limiter -> Ducking Gain Node -> Loa / Tai nghe
+      // Video Source -> 3-Band Studio EQ -> Pre-Gain -> Tube Saturator -> Studio Limiter -> Loa / Tai nghe
       audioSource.connect(bassFilter);
       bassFilter.connect(midFilter);
       midFilter.connect(airFilter);
       airFilter.connect(preGainNode);
       preGainNode.connect(waveShaper);
       waveShaper.connect(studioLimiter);
-      studioLimiter.connect(duckingGainNode);
-      duckingGainNode.connect(audioCtx.destination);
+      studioLimiter.connect(audioCtx.destination);
 
       boundVideo = video;
       console.log('[UltraBlock DSP] 🎧 Audiophile Engine Activated! Gain =', currentGainValue);
@@ -128,67 +121,8 @@
     } catch (e) {}
   }
 
-  function sendCaptionsToIsolatedWorld(tracks) {
-    if (!tracks || !tracks.length) {
-      // 1. mp.getPlayerResponse() (Cách chuẩn xác và mới nhất của YouTube player)
-      try {
-        const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
-        if (mp && typeof mp.getPlayerResponse === 'function') {
-          const resp = mp.getPlayerResponse();
-          tracks = resp?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        }
-      } catch (e) {}
-
-      // 2. window.ytInitialPlayerResponse
-      if (!tracks || !tracks.length) {
-        tracks = window.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      }
-
-      // 3. mp.getOption('captions', 'tracklist')
-      if (!tracks || !tracks.length) {
-        try {
-          const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
-          if (mp && typeof mp.getOption === 'function') {
-            const list = mp.getOption('captions', 'tracklist');
-            if (Array.isArray(list) && list.length > 0) {
-              tracks = list.map(t => ({
-                baseUrl: t.baseUrl || t.url || '',
-                languageCode: t.languageCode || (t.vss_id ? t.vss_id.replace(/^[a\.]*/, '') : 'en'),
-                name: t.name || t.displayName || { simpleText: t.languageName || 'Auto' },
-                vssId: t.vssId || t.vss_id || '',
-                kind: t.kind || '',
-                isTranslatable: t.is_translateable !== false
-              }));
-            }
-          }
-        } catch (e) {}
-      }
-
-      // 4. cached tracks
-      if (!tracks || !tracks.length) {
-        tracks = cachedCaptionTracks;
-      }
-    }
-
-    if (tracks && tracks.length > 0) {
-      const normalized = tracks.map(t => ({
-        baseUrl: t.baseUrl || t.url || '',
-        languageCode: t.languageCode || 'en',
-        name: typeof t.name === 'string' ? { simpleText: t.name } : (t.name || { simpleText: 'English' }),
-        vssId: t.vssId || t.vss_id || '',
-        kind: t.kind || '',
-        isTranslatable: t.isTranslatable !== false
-      })).filter(t => Boolean(t.baseUrl));
-
-      if (normalized.length > 0) {
-        cachedCaptionTracks = normalized;
-        window.postMessage({ type: 'UB_CAPTIONS_DATA', tracks: normalized }, '*');
-      }
-    }
-  }
-
-  // Lắng nghe lệnh đổi mức âm lượng, Ducking và lấy phụ đề từ Content Script
-  window.addEventListener('message', async (event) => {
+  // Lắng nghe lệnh đổi mức âm lượng từ Content Script
+  window.addEventListener('message', (event) => {
     if (!event.data) return;
     if (event.data.type === 'UB_SET_AUDIO_GAIN') {
       currentGainValue = parseFloat(event.data.gain) || 2.2;
@@ -196,76 +130,8 @@
         preGainNode.gain.setTargetAtTime(currentGainValue, audioCtx.currentTime, 0.05);
       }
       disableYouTubeCompression();
-    } else if (event.data.type === 'UB_AUDIO_DUCK') {
-      const isDuck = Boolean(event.data.duck);
-      let targetGain = 1.0;
-      if (isDuck) {
-        targetGain = (event.data.level !== undefined && event.data.level !== null)
-          ? Math.max(0, Math.min(1.0, parseFloat(event.data.level)))
-          : 0.15;
-      }
-
-      if (duckingGainNode && audioCtx) {
-        duckingGainNode.gain.cancelScheduledValues(audioCtx.currentTime);
-        duckingGainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.04);
-      }
-
-      const v = document.querySelector('video');
-      if (v) {
-        if (targetGain <= 0.005) {
-          v.muted = true;
-        } else {
-          v.muted = false;
-        }
-      }
-    } else if (event.data.type === 'UB_GET_CAPTIONS') {
-      sendCaptionsToIsolatedWorld();
-    } else if (event.data.type === 'UB_FETCH_SUBTITLES_DIRECT') {
-      const reqUrl = event.data.url;
-      const reqId = event.data.requestId;
-      try {
-        const res = await window.fetch(reqUrl, { credentials: 'include' });
-        const text = await res.text();
-        window.postMessage({ type: 'UB_SUBTITLES_FETCHED', requestId: reqId, data: text, success: true }, '*');
-      } catch (err) {
-        window.postMessage({ type: 'UB_SUBTITLES_FETCHED', requestId: reqId, error: err.message, success: false }, '*');
-      }
-    } else if (event.data.type === 'UB_FORCE_LOAD_CAPTIONS') {
-      try {
-        const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
-        if (mp) {
-          if (typeof mp.loadModule === 'function') mp.loadModule('captions');
-          if (typeof mp.getOption === 'function') {
-            const list = mp.getOption('captions', 'tracklist') || [];
-            const best = list.find(t => t.languageCode === 'en' || t.languageCode === 'vi') || list[0];
-            if (best && typeof mp.setOption === 'function') {
-              mp.setOption('captions', 'track', best);
-            }
-          }
-        }
-      } catch (e) {}
     }
   });
-
-  // Hook XMLHttpRequest để bắt các gói tin timedtext nếu YouTube dùng XHR
-  const origXhrOpen = XMLHttpRequest.prototype.open;
-  const origXhrSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    this._ubUrl = typeof url === 'string' ? url : '';
-    return origXhrOpen.apply(this, [method, url, ...rest]);
-  };
-  XMLHttpRequest.prototype.send = function(...args) {
-    if (this._ubUrl && this._ubUrl.includes('/api/timedtext')) {
-      this.addEventListener('load', () => {
-        try {
-          if (this.responseText && this.responseText.length > 20) {
-            window.postMessage({ type: 'UB_CAPTIONS_FETCHED_LIVE', data: this.responseText, url: this._ubUrl }, '*');
-          }
-        } catch (e) {}
-      });
-    }
-    return origXhrSend.apply(this, args);
-  };
 
   setInterval(() => {
     const video = document.querySelector('video');

@@ -55,36 +55,13 @@
         opacity: 1 !important;
       }
 
-      /* Khung video và Live Chat tự nhiên */
-      ytd-watch-flexy:not([live]) #related {
-        display: none !important;
-      }
-      #chat, #chat-container, ytd-live-chat-frame, iframe#chatframe {
-        display: block !important;
+      /* Bảo toàn 100% cột bên phải (Video đề xuất & Live Chat) cùng khu vực Bình luận */
+      #secondary, #secondary-inner, #related, ytd-watch-next-secondary-results-renderer,
+      #chat, #chat-container, ytd-live-chat-frame, iframe#chatframe,
+      #comments, ytd-comments, #top-level-buttons-computed, #actions-inner {
         visibility: visible !important;
         opacity: 1 !important;
       }
-
-      /* Chỉ ẩn video đề xuất liên quan, giữ lại khung Chat trong #secondary */
-      #related, ytd-watch-next-secondary-results-renderer {
-        display: none !important;
-      }
-
-      /* Xóa khu vực bình luận dưới video thường, không ẩn item-section để tránh mất kết quả search */
-      #comments, ytd-comments {
-        display: none !important;
-      }
-
-      /* Xóa nút tương tác rườm rà */
-      #top-level-buttons-computed, #actions-inner,
-      ytd-menu-renderer[has-flexible-items], ytd-download-button-renderer,
-      #ticket-shelf, ytd-merch-shelf-renderer, #merchandise-shelf,
-      ytd-donation-shelf-renderer {
-        display: none !important;
-      }
-
-      /* Giữ Live Chat và khu vực tương tác khi xem Live */
-      /* Không ẩn #chat, #chat-container, ytd-live-chat-frame */
 
       /* Xóa Ambient Lighting */
       #cinematics, .ytp-ambient-lighting {
